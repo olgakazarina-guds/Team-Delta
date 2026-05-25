@@ -1,3 +1,4 @@
+```bash
 # Create project directory
 mkdir lms_convert && cd lms_convert
 
@@ -15,3 +16,4 @@ uv sync
 
 # Install dev dependencies
 uv sync --group dev
+```
