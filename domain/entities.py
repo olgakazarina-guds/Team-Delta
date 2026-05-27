@@ -3,6 +3,9 @@ from typing import List, Optional, Dict, Any
 from .enums import SourceSystem, NodeType, AssessmentType, Severity
 from .raw_fragment import RawFragment
 
+# ============================================================
+# Content structure
+# ============================================================
 class ContentNode(BaseModel):
     node_id: str
     node_type: NodeType
@@ -10,14 +13,18 @@ class ContentNode(BaseModel):
     parent_id: Optional[str] = None
     position: int = 0
     children: List["ContentNode"] = []
-    raw_fragment_ids: List[str] = []          # references to RawFragment
+    assessment_id: Optional[str] = None          # link to an Assessment (if this node contains a quiz/problem)
+    raw_fragment_ids: List[str] = []             # references to RawFragment
     metadata: Dict[str, Any] = {}
 
+# ============================================================
+# Assessment & questions (canonical quiz/problem representation)
+# ============================================================
 class Assessment(BaseModel):
     assessment_id: str
     course_id: str
     title: str
-    assessment_type: AssessmentType
+    assessment_type: AssessmentType               # e.g., "quiz", "openassessment", "assignment"
     max_score: Optional[float] = None
     raw_fragment_ids: List[str] = []
     metadata: Dict[str, Any] = {}
@@ -25,7 +32,7 @@ class Assessment(BaseModel):
 class Question(BaseModel):
     question_id: str
     assessment_id: str
-    question_type: str
+    question_type: str                            # "multichoice", "text_input", "numerical", "code", etc.
     prompt_text: Optional[str] = None
     points: float = 0.0
     raw_fragment_ids: List[str] = []
@@ -37,6 +44,9 @@ class AnswerOption(BaseModel):
     text: str
     is_correct: bool = False
 
+# ============================================================
+# Assets (files, images, etc.)
+# ============================================================
 class Asset(BaseModel):
     asset_id: str
     course_id: str
@@ -45,6 +55,9 @@ class Asset(BaseModel):
     checksum: Optional[str] = None
     raw_fragment_id: Optional[str] = None
 
+# ============================================================
+# Migration notes (loss tracking)
+# ============================================================
 class MappingNote(BaseModel):
     note_id: str
     severity: Severity
@@ -54,12 +67,31 @@ class MappingNote(BaseModel):
     target_ref: Optional[str] = None
     fallback_used: bool = False
 
+# ============================================================
+# LTI (external tools) 
+# ============================================================
+class LtiToolLink(BaseModel):
+    link_id: str
+    course_id: str
+    content_node_id: str                          # which node launches this tool
+    tool_name: str
+    launch_url: str
+    custom_params: Dict[str, str] = {}
+    is_graded: bool = False
+    raw_fragment_id: Optional[str] = None
+
+# ============================================================
+# Course root
+# ============================================================
 class Course(BaseModel):
     course_id: str
     title: str
     source_system: SourceSystem
     content_nodes: List[ContentNode] = []
     assessments: List[Assessment] = []
+    questions: List[Question] = []
+    answer_options: List[AnswerOption] = []
+    lti_links: List[LtiToolLink] = []           
     assets: List[Asset] = []
     raw_fragments: List[RawFragment] = []
     mapping_notes: List[MappingNote] = []
