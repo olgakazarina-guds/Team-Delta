@@ -1,5 +1,6 @@
-from domain.entities import Course, ContentNode, Assessment, Asset, RawFragment, MappingNote
-from domain.enums import SourceSystem, NodeType, Severity, AssessmentType
+from domain.entities import Course, ContentNode, Assessment, Question, AnswerOption, Asset, RawFragment, MappingNote
+from domain.enums import SourceSystem, NodeType, AssessmentType, Severity   # added AssessmentType
+from adapters.openedx.problem_parser import parse_problem
 import uuid
 
 class TransformService:
@@ -24,11 +25,15 @@ class TransformService:
                 checksum=frag.get("checksum")
             ))
 
+        # Prepare containers for assessments, questions, answer_options
+        assessments = []
+        questions = []
+        answer_options = []
+
         # Create content nodes (chapters -> sequentials -> verticals -> components)
         content_nodes = []
         node_id_map = {}  # url_name -> node_id for linking
 
-        # Process chapters, sequentials, verticals
         for chapter_idx, chapter in enumerate(parsed.get("chapters", [])):
             chapter_node = ContentNode(
                 node_id=str(uuid.uuid4()),
@@ -84,12 +89,62 @@ class TransformService:
                         )
                         vert_node.children.append(comp_node)
 
-        # Create Course object
+                        # --- Handle problem components ---
+                        if node_type == NodeType.PROBLEM and comp.get("raw_fragment_id"):
+                            raw_frag = next((f for f in raw_fragments if f.fragment_id == comp["raw_fragment_id"]), None)
+                            if raw_frag and raw_frag.raw_text:
+                                problem_data = parse_problem(raw_frag.raw_text, comp.get("url_name", ""))
+                                
+                                # Create assessment
+                                assessment_id = str(uuid.uuid4())
+                                assessment = Assessment(
+                                    assessment_id=assessment_id,
+                                    course_id=job_id,      # temporary, will be replaced later
+                                    title=problem_data["assessment_title"],
+                                    assessment_type=AssessmentType.QUIZ,   # using enum
+                                    max_score=sum(q.get("points", 0) for q in problem_data["questions"]),
+                                    raw_fragment_ids=[comp["raw_fragment_id"]],
+                                    metadata={
+                                        "problem_url_name": comp.get("url_name"),
+                                        "original_type": "problem"
+                                    }
+                                )
+                                assessments.append(assessment)
+                                
+                                # Link the content node to this assessment
+                                comp_node.assessment_id = assessment_id
+                                
+                                # Create questions and answer options
+                                for q_data in problem_data["questions"]:
+                                    question = Question(
+                                        question_id=q_data["question_id"],
+                                        assessment_id=assessment_id,
+                                        question_type=q_data["type"],
+                                        prompt_text=q_data["prompt"],
+                                        points=q_data.get("points", 1.0),
+                                        raw_fragment_ids=[comp["raw_fragment_id"]],
+                                        metadata={}
+                                    )
+                                    questions.append(question)
+                                    
+                                    for opt in q_data.get("answer_options", []):
+                                        answer_option = AnswerOption(
+                                            option_id=str(uuid.uuid4()),
+                                            question_id=question.question_id,
+                                            text=opt["text"],
+                                            is_correct=opt["is_correct"]
+                                        )
+                                        answer_options.append(answer_option)
+
+        # Build the Course object
         course = Course(
-            course_id=job_id,  # temporary, will be replaced later
+            course_id=job_id,
             title=parsed.get("course_title", "Unnamed Course"),
             source_system=SourceSystem.OPENEDX,
             content_nodes=content_nodes,
+            assessments=assessments,
+            questions=questions,
+            answer_options=answer_options,
             raw_fragments=raw_fragments,
             metadata={
                 "org": parsed.get("org"),

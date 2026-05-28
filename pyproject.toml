@@ -8,6 +8,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "rich>=15.0.0",
     "sqlalchemy>=2.0.49",
+    "streamlit>=1.57.0",
     "typer>=0.25.1",
 ]
 
@@ -18,6 +19,9 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.1.0",
 ]
+
+[tool.setuptools]
+packages = ["cli", "core", "data", "domain", "adapters", "persistence"]  
 
 [project.scripts]
 lms-converter = "cli.main:app"
