@@ -152,7 +152,7 @@ class TransformService:
                     activity_metadata["assessment_id"] = activity["assessment_id"]
                 activity_metadata.update(activity.get("metadata", {}))
 
-                act_node = ContentNode(
+                activity_node = ContentNode(
                     node_id=str(uuid.uuid4()),
                     node_type=node_type,
                     title=activity.get("title"),
@@ -161,7 +161,7 @@ class TransformService:
                     raw_fragment_ids=[activity["raw_fragment_id"]] if activity.get("raw_fragment_id") else [],
                     metadata=activity_metadata,
                 )
-                section_node.children.append(act_node)
+                section_node.children.append(activity_node)
 
         # Build Assessment objects from the flat list accumulated during the parse.
         # course_id falls back to job_id if the Moodle course id was not present in course.xml
