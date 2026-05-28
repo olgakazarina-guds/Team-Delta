@@ -10,6 +10,9 @@ git remote add origin https://github.com/Team-Delta/Team-Delta.git
 
 # Pull
 git pull origin main
+# Note: 'uv init' creates some files within the directory and so pulling after 
+# running it will require using the '--allow-unrelated-histories' flag or other
+# overwrite options
 
 # Now uv sync will read the pyproject.toml and setup everything
 uv sync
