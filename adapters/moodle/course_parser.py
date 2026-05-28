@@ -21,7 +21,7 @@ Usage:
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from adapters.moodle.backup_reader import MoodleBackupReader
+from .backup_reader import MoodleBackupReader
 from domain.enums import NodeType
 
 
