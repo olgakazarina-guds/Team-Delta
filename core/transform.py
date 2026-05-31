@@ -155,93 +155,123 @@ class TransformService:
         return course
 
     def _transform_moodle(self, parsed: dict, job_id: str) -> Course:
-        """
-        Convert the dict produced by MoodleCourseParser into a canonical Course object.
-
-        The tree structure is two levels deep: Section -> Activity.
-        Each section becomes a top-level ContentNode; its activities become children
-        appended inline to section_node.children, matching the OpenEdX nesting pattern.
-
-        Assessments (quizzes) and Assets (resource files) are built from the flat lists
-        accumulated by the parser and stored on the Course alongside content_nodes.
-
-        Pydantic v2 coerces plain dict source_location values to SourceLocation objects
-        automatically, so fragments can be passed as dicts without manual hydration.
-        """
-        raw_fragments = [
-            RawFragment(
-                fragment_id=fragment["fragment_id"],
-                kind=fragment["kind"],
-                source_location=fragment["source_location"],
-                raw_text=fragment.get("raw_text", ""),  # note use of get since it might be absent
-                raw_bytes_ref=fragment.get("raw_bytes_ref", ""),
-                checksum=fragment.get("checksum", ""),
-            )
-            for fragment in parsed.get("fragments", [])
-        ]
+        raw_fragments = []
+        for frag in parsed.get("raw_fragments", []):
+            raw_fragments.append(RawFragment(
+                fragment_id=frag["fragment_id"],
+                kind=frag["kind"],
+                source_location=frag["source_location"],
+                raw_text=frag.get("raw_text"),
+                raw_bytes_ref=frag.get("raw_bytes_ref"),
+                checksum=frag.get("checksum")
+            ))
 
         content_nodes = []
-        for section in parsed.get("sections", []):
-            section_node = ContentNode(
+        assessments = []
+        assets = []
+
+        for section_idx, section in enumerate(parsed.get("sections", [])):
+            # Chapter = Moodle section
+            chapter_node = ContentNode(
                 node_id=str(uuid.uuid4()),
-                node_type=NodeType.SECTION,
-                title=section.get("title", ""),
-                position=section.get("position", 0),
+                node_type=NodeType.CHAPTER,
+                title=section.get("title", f"Section {section_idx+1}"),
+                position=section_idx,
                 raw_fragment_ids=[section["raw_fragment_id"]] if section.get("raw_fragment_id") else [],
                 metadata={"moodle_section_id": section.get("section_id")},
             )
-            content_nodes.append(section_node)
+            content_nodes.append(chapter_node)
 
-            for activity_idx, activity in enumerate(section.get("activities", [])):
-                node_type = NodeType(activity.get("node_type", NodeType.UNKNOWN.value))
+            # Create a Sequential (required by Open edX)
+            seq_node = ContentNode(
+                node_id=str(uuid.uuid4()),
+                node_type=NodeType.SEQUENTIAL,
+                title="Content",
+                parent_id=chapter_node.node_id,
+                position=0,
+            )
+            chapter_node.children.append(seq_node)
 
-                # Assemble activity metadata: start with Moodle identifiers, then overlay content_html and
-                # assessment_id if present, then any type-specific extras from the parser's own metadata dict
-                activity_metadata = {
-                    "moodle_cmid": activity.get("cmid"),
-                    "module_name": activity.get("module_name"),
-                }
-                if activity.get("content_html"):
-                    activity_metadata["content_html"] = activity["content_html"]
-                if activity.get("assessment_id"):
-                    activity_metadata["assessment_id"] = activity["assessment_id"]
-                activity_metadata.update(activity.get("metadata", {}))
-
-                activity_node = ContentNode(
+            # Process activities -> each becomes a Vertical with components
+            for act_idx, act in enumerate(section.get("activities", [])):
+                vert_node = ContentNode(
                     node_id=str(uuid.uuid4()),
-                    node_type=node_type,
-                    title=activity.get("title"),
-                    parent_id=section_node.node_id,
-                    position=activity_idx,
-                    raw_fragment_ids=[activity["raw_fragment_id"]] if activity.get("raw_fragment_id") else [],
-                    metadata=activity_metadata,
+                    node_type=NodeType.VERTICAL,
+                    title=act.get("title", f"Activity {act_idx+1}"),
+                    parent_id=seq_node.node_id,
+                    position=act_idx,
+                    raw_fragment_ids=[act["raw_fragment_id"]] if act.get("raw_fragment_id") else [],
+                    metadata={"moodle_cmid": act.get("cmid")},
                 )
-                section_node.children.append(activity_node)
+                seq_node.children.append(vert_node)
 
-        # Build Assessment objects from the flat list accumulated during the parse.
-        # course_id falls back to job_id if the Moodle course id was not present in course.xml
-        assessments = [
-            Assessment(
+                # Determine component type
+                module = act.get("module_name", "")
+                node_type_str = act.get("node_type", "")
+                content_html = act.get("content_html", "")
+                assessment_id = act.get("assessment_id")
+
+                if module == "page" or node_type_str == "page":
+                    comp = ContentNode(
+                        node_id=str(uuid.uuid4()),
+                        node_type=NodeType.HTML,
+                        title=act.get("title"),
+                        parent_id=vert_node.node_id,
+                        position=0,
+                        metadata={"content_html": content_html},
+                    )
+                    vert_node.children.append(comp)
+                elif module == "label" or node_type_str == "html":
+                    comp = ContentNode(
+                        node_id=str(uuid.uuid4()),
+                        node_type=NodeType.HTML,
+                        title=act.get("title"),
+                        parent_id=vert_node.node_id,
+                        position=0,
+                        metadata={"content_html": content_html},
+                    )
+                    vert_node.children.append(comp)
+                elif module == "quiz" or node_type_str == "quiz":
+                    comp = ContentNode(
+                        node_id=str(uuid.uuid4()),
+                        node_type=NodeType.PROBLEM,
+                        title=act.get("title"),
+                        parent_id=vert_node.node_id,
+                        position=0,
+                        assessment_id=assessment_id,
+                    )
+                    vert_node.children.append(comp)
+                else:
+                    # Fallback: store as HTML placeholder
+                    comp = ContentNode(
+                        node_id=str(uuid.uuid4()),
+                        node_type=NodeType.HTML,
+                        title=act.get("title", "Unknown"),
+                        parent_id=vert_node.node_id,
+                        position=0,
+                        metadata={"content_html": f"<p>Unsupported activity: {module}</p>"},
+                    )
+                    vert_node.children.append(comp)
+
+        # Build assessments from parsed data
+        for a in parsed.get("assessments", []):
+            assessments.append(Assessment(
                 assessment_id=a["assessment_id"],
                 course_id=parsed.get("course_id") or job_id,
                 title=a.get("title", ""),
-                assessment_type=AssessmentType(a.get("assessment_type", "quiz")),
+                assessment_type=AssessmentType.QUIZ,
                 raw_fragment_ids=[],
-            )
-            for a in parsed.get("assessments", [])
-        ]
+            ))
 
-        # Build Asset objects for resource files resolved via inforef during the parse
-        assets = [
-            Asset(
+        # Build assets
+        for a in parsed.get("assets", []):
+            assets.append(Asset(
                 asset_id=a["asset_id"],
                 course_id=parsed.get("course_id") or job_id,
                 path=a.get("path", ""),
                 mime_type=a.get("mime_type"),
                 checksum=a.get("checksum"),
-            )
-            for a in parsed.get("assets", [])
-        ]
+            ))
 
         return Course(
             course_id=parsed.get("course_id") or job_id,
@@ -256,4 +286,3 @@ class TransformService:
                 "lang": parsed.get("lang"),
             },
         )
-
