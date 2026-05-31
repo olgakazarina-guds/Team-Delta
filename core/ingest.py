@@ -24,5 +24,6 @@ class IngestService:
             "job_id": job_id,
             "course": course,
             "report": report,
-            "raw_fragments_count": len(parsed.get("raw_fragments", []))
+            "raw_fragments_count": len(parsed.get("raw_fragments", [])),
+            "extracted_path": parsed.get("extracted_path"),
         }
