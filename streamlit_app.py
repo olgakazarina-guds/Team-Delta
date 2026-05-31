@@ -219,6 +219,13 @@ with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
 @st.dialog("Migrate Course")
 def migrate_dialog(): 
     st.markdown("### Configure Migration")
+#this is where I can add more code for buttons, etc. (Olga)
+
+    migration_option = st.selectbox(
+        "Select migration option",
+        ["Full course", "Content only", "Assessment only"],
+        key="migration_option"
+    )
 
 # ------------------------------------------------------------
 # Inspect action
