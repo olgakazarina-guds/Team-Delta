@@ -2,8 +2,14 @@ import typer
 import json
 from pathlib import Path
 from core.ingest import IngestService
+from core.migrate import MigrationService   # we'll create this next
 
 app = typer.Typer(help="LMS Converter - Migrate courses between Open edX and Moodle")
+
+@app.callback()
+def main():
+    """LMS Converter - Migrate courses between Open edX and Moodle"""
+    pass
 
 @app.command()
 def inspect(
@@ -50,6 +56,51 @@ def inspect(
         with open(output, "w") as f:
             json.dump(result, f, indent=2)
         typer.echo(f"\nReport saved to {output}")
+
+@app.command()
+def migrate(
+    source_path: str = typer.Argument(..., help="Path to source course export"),
+    source: str = typer.Option("moodle", "--source", "-s", help="Source LMS: moodle or openedx"),
+    target: str = typer.Option("openedx", "--target", "-t", help="Target LMS: openedx or moodle"),
+    output: str = typer.Option("export.tar.gz", "--output", "-o", help="Output file path"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
+):
+    """Migrate a course from source LMS to target LMS."""
+    if not Path(source_path).exists():
+        typer.echo(f"Error: File {source_path} not found", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Inspecting {source} course from {source_path}...")
+    ingest = IngestService()
+    try:
+        result = ingest.inspect(source_path, source_type=source, work_dir="data/extracted")
+    except Exception as e:
+        typer.echo(f"Inspection failed: {e}", err=True)
+        raise typer.Exit(1)
+
+    # IMPORTANT: IngestService must return a Course object (not a dict) for the next lines to work.
+    # We'll update IngestService shortly.
+    course = result["course"]   # this should be a Course object
+    if verbose:
+        typer.echo(f"Course title: {course.title}")
+        typer.echo(f"Number of content nodes: {len(course.content_nodes)}")
+        typer.echo(f"Number of assessments: {len(course.assessments)}")
+
+    typer.echo(f"Migrating to {target}...")
+    migrator = MigrationService()
+    try:
+        if target == "openedx":
+            output_path = migrator.migrate_to_openedx(course, output)
+        elif target == "moodle":
+            raise NotImplementedError("Moodle target not yet implemented")
+        else:
+            typer.echo(f"Unsupported target LMS: {target}", err=True)
+            raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"Migration failed: {e}", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Migration complete. Output: {output_path}")
 
 def _print_node_tree(node, indent=0):
     prefix = "  " * indent
