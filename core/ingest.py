@@ -22,7 +22,7 @@ class IngestService:
         report = self.validation_service.validate(course)
         return {
             "job_id": job_id,
-            "course": course.dict(),
+            "course": course,
             "report": report,
             "raw_fragments_count": len(parsed.get("raw_fragments", []))
         }
