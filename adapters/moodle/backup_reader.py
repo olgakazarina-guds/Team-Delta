@@ -18,27 +18,47 @@ Usage:
 ===============================================================================
 """
 
+import tarfile
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import os
 
 
 class MoodleBackupReader:
 
     def extract_archive(self, mbz_path: str, workdir: str) -> Path:
         """
-        Unzip the .mbz archive into work_dir and return the extraction root Path.
+        Extract the .mbz archive (which can be .tar.gz or .zip) into work_dir
+        and return the Path to the directory containing moodle_backup.xml.
 
-        A .mbz file is a plain ZIP archive thus the use of zipfile.
-        work_dir is created if it does not already exist.
-        All subsequent read methods expect paths relative to the returned root.
+        .mbz files are typically gzip-compressed tar archives, but Moodle can
+        also produce zip-based backups. This method detects the format by
+        reading the first two bytes (gzip magic 0x1F 0x8B) and uses the
+        appropriate extractor.
         """
         target_path = Path(workdir)
         target_path.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(mbz_path, 'r') as archive:
-            archive.extractall(target_path)
-        return target_path
+
+        # Detect archive type by reading magic bytes
+        with open(mbz_path, 'rb') as f:
+            header = f.read(2)
+            is_gzip = (header == b'\x1f\x8b')
+
+        if is_gzip:
+            with tarfile.open(mbz_path, 'r:gz') as tar:
+                tar.extractall(target_path)
+        else:
+            with zipfile.ZipFile(mbz_path, 'r') as zf:
+                zf.extractall(target_path)
+
+        # Locate the directory containing moodle_backup.xml
+        for root, dirs, files in os.walk(target_path):
+            if "moodle_backup.xml" in files:
+                return Path(root)
+
+        raise FileNotFoundError("moodle_backup.xml not found in extracted archive")
 
     def read_manifest(self, extracted: Path) -> Dict[str, Any]:
         """
@@ -84,7 +104,7 @@ class MoodleBackupReader:
             })
 
         return {
-            "course_information": course_information,
+            "course_info": course_information,
             "sections": sections,
             "activities": activities,
             "file_records": self.read_file_records(extracted),
@@ -186,10 +206,4 @@ class MoodleBackupReader:
             fid for f in root.findall(".//file")
             if (fid := f.findtext("id", ""))
         ]
-
-
-
-
-
-
 
