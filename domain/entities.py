@@ -54,6 +54,7 @@ class Asset(BaseModel):
     mime_type: Optional[str] = None
     checksum: Optional[str] = None
     raw_fragment_id: Optional[str] = None
+    metadata: Dict[str, Any] = {}
 
 # ============================================================
 # Migration notes (loss tracking)

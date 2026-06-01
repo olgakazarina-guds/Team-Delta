@@ -260,6 +260,7 @@ class MoodleCourseParser:
             "quiz": self._parse_quiz,
             "resource": self._parse_resource,
             "scorm": self._parse_scorm,
+            "videofile": self._parse_video,
         }
 
         # Handle missing XML or unrecognized module type
@@ -346,25 +347,51 @@ class MoodleCourseParser:
         """
         Parse a Moodle 'url' activity.
         
-        External URLs are stored in the <externalurl> element. Display mode
-        (new window, embed, etc.) is not captured as it has no equivalent
-        in the canonical model.
+        External URLs are stored in the <externalurl> element. If the URL points
+        to YouTube, we extract the video ID and mark it as a VIDEO component.
         
         Args:
             root: Parsed XML root element
             activity_info: Activity metadata from manifest
             
         Returns:
-            Dictionary with title, node_type=ACTIVITY, and metadata.externalurl
+            Dictionary with title, node_type (VIDEO or ACTIVITY), and metadata
         """
+        import re
         inner = root.find("url") or root
         title = inner.findtext("name", activity_info.get("title", ""))
         url = inner.findtext("externalurl", "")
+        
+        # Detect YouTube URLs and extract video ID
+        youtube_id = None
+        youtube_patterns = [
+            r"(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})",
+            r"(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})",
+        ]
+        
+        for pattern in youtube_patterns:
+            match = re.search(pattern, url)
+            if match:
+                youtube_id = match.group(1)
+                break
+        
+        if youtube_id:
+            return {
+                "title": title,
+                "node_type": NodeType.VIDEO.value,
+                "metadata": {
+                    "activity_type": "youtube",
+                    "youtube_id": youtube_id,
+                    "externalurl": url,
+                },
+            }
+        
         return {
             "title": title,
             "node_type": NodeType.ACTIVITY.value,
             "metadata": {"activity_type": "url", "externalurl": url},
         }
+
 
     def _parse_forum(
         self, root, activity_info, extracted, manifest, assessments, assets
@@ -482,14 +509,26 @@ class MoodleCourseParser:
 
         file_ids = self.reader.read_inforef(extracted, activity_info["directory"])
         asset_id = None
+        is_video = False
         for fid in file_ids:
             record = manifest["file_records"].get(fid)
             if not record:
                 continue
             contenthash = record.get("contenthash", "")
             filename = record.get("filename", "")
+            mimetype = record.get("mimetype", "")
             if not contenthash or not filename or filename == ".":
                 continue
+
+            # Check if this is a video file
+            if mimetype and "video" in mimetype.lower():
+                is_video = True
+            elif not mimetype:
+                # Fallback: check file extension
+                ext = filename.lower().split(".")[-1] if "." in filename else ""
+                if ext in ("mp4", "webm", "ogg", "mov", "avi"):
+                    is_video = True
+
             asset_id = str(uuid.uuid4())
             filepath = record.get("filepath", "/").lstrip("/")
             assets.append({
@@ -497,13 +536,17 @@ class MoodleCourseParser:
                 "path": filepath + filename,
                 "mime_type": record.get("mimetype"),
                 "checksum": contenthash,
+                "is_video": is_video,
             })
             break  # primary file only
 
         return {
             "title": title,
-            "node_type": NodeType.ACTIVITY.value,
-            "metadata": {"activity_type": "resource", "asset_id": asset_id},
+            "node_type": NodeType.VIDEO.value if is_video else NodeType.ACTIVITY.value,
+            "metadata": {
+                "activity_type": "video" if is_video else "resource", 
+                "asset_id": asset_id,
+            },
         }
 
     def _parse_scorm(
@@ -529,6 +572,65 @@ class MoodleCourseParser:
             "title": title,
             "node_type": NodeType.SCORM.value,
             "metadata": {"activity_type": "scorm"},
+        }
+
+    def _parse_video(
+        self, root, activity_info, extracted, manifest, assessments, assets
+    ):
+        """
+        Parse a Moodle 'video' activity (if using mod_videofile plugin) 
+        or extract video from resource/url activities.
+        
+        For video files (.mp4, .webm, .ogg), creates an asset and returns
+        metadata with video URL.
+        
+        Args:
+            root: Parsed XML root element
+            activity_info: Activity metadata from manifest
+            
+        Returns:
+            Dictionary with title, node_type=VIDEO, and metadata.asset_id
+        """
+        inner = root.find("videofile") or root.find("resource") or root
+        title = inner.findtext("name", activity_info.get("title", ""))
+        
+        # Get file IDs from inforef.xml
+        file_ids = self.reader.read_inforef(extracted, activity_info["directory"])
+        asset_id = None
+        video_url = None
+        
+        for fid in file_ids:
+            record = manifest["file_records"].get(fid)
+            if not record:
+                continue
+            contenthash = record.get("contenthash", "")
+            filename = record.get("filename", "")
+            mimetype = record.get("mimetype", "")
+            
+            # Check if this is a video file
+            if not contenthash or not filename:
+                continue
+            if mimetype and "video" in mimetype.lower():
+                asset_id = str(uuid.uuid4())
+                filepath = record.get("filepath", "/").lstrip("/")
+                assets.append({
+                    "asset_id": asset_id,
+                    "path": filepath + filename,
+                    "mime_type": mimetype,
+                    "checksum": contenthash,
+                    "is_video": True,
+                })
+                video_url = filepath + filename
+                break
+        
+        return {
+            "title": title,
+            "node_type": NodeType.VIDEO.value,
+            "metadata": {
+                "activity_type": "video",
+                "asset_id": asset_id,
+                "video_url": video_url,
+            },
         }
 
     # -------------------------------------------------------------------------
