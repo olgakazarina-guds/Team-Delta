@@ -190,7 +190,9 @@ def migrate(
             output_path = migrator.migrate_to_openedx(course, output)
             typer.echo("Migration complete!")
         elif target == "moodle":
-            raise NotImplementedError("Moodle target not yet implemented")
+                typer.echo("Converting to Moodle format...")
+                output_path = migrator.migrate_to_moodle(course, output)
+                typer.echo("Migration complete!")
         else:
             typer.echo(f"Unsupported target LMS: {target}", err=True)
             raise typer.Exit(1)
