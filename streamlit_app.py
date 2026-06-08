@@ -216,28 +216,39 @@ with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
     tmp_file.write(uploaded_file.getvalue())
     tmp_path = tmp_file.name
 
+@st.dialog("Migrate Course")
+def migrate_dialog(): 
+    st.markdown("### Configure Migration")
 
 # ------------------------------------------------------------
 # Inspect action
 # ------------------------------------------------------------
-if st.button("🔍 Inspect Course", type="primary"):
-    with st.spinner("Inspecting course... This may take a few seconds."):
-        try:
-            service = IngestService()
-            result = service.inspect(
-                tmp_path,
-                source_type=source_lms,
-                work_dir="data/extracted",
-            )
+col_inspect, col_migrate = st.columns(2)
+with col_inspect:
+    if st.button("🔍 Inspect Course", type="primary"):
+        with st.spinner("Inspecting course... This may take a few seconds."):
+            try:
+                service = IngestService()
+                result = service.inspect(
+                    tmp_path,
+                    source_type=source_lms,
+                    work_dir="data/extracted",
+                )
 
-            st.session_state.inspection_result = result
-            st.session_state.inspection_path = tmp_path
-            st.success("Inspection complete!")
+                st.session_state.inspection_result = result
+                st.session_state.inspection_path = tmp_path
+                st.success("Inspection complete!")
 
-        except Exception as e:
-            st.error(f"Inspection failed: {e}")
-            st.exception(e)
-
+            except Exception as e:
+                st.error(f"Inspection failed: {e}")
+                st.exception(e)
+with col_inspect:
+    if st.session_state.inspection_result is not None:
+        if st.button("Migrate", type="secondary", key="migrate_btn"):
+            migrate_dialog()
+            pass
+    else:
+        st.button("Migrate", type="secondary", key="migrate_btn_disabled", disabled=True)
 
 # ------------------------------------------------------------
 # Render inspection view whenever a result exists

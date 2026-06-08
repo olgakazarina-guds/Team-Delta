@@ -31,7 +31,6 @@ def main() -> None:
     """
     pass
 
-
 # Register commands
 app.command("inspect")(inspect_command)
 app.command("migrate")(migrate_command)

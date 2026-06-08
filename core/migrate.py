@@ -10,6 +10,7 @@ from typing import Optional
 
 from adapters.moodle.target_adapter import MoodleTargetAdapter
 from adapters.openedx.target_adapter import OpenEdxTargetAdapter
+from adapters.moodle.target_adapter import MoodleTargetAdapter
 from domain.entities import Course
 
 

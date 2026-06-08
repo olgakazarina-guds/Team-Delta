@@ -1,7 +1,6 @@
 """
 Moodle Target Adapter – Converts canonical Course to Moodle backup (.mbz)
 """
-
 import tarfile
 import uuid
 import xml.etree.ElementTree as ET
@@ -229,7 +228,6 @@ class MoodleTargetAdapter:
             return
         root = ET.Element("quiz")   # Moodle questions.xml root is <quiz>
         # Group questions by assessment (category)
-        # For simplicity, create one question category per assessment
         category_id = 1
         for assessment in self.course.assessments:
             cat = ET.SubElement(root, "question", type="category")
