@@ -58,99 +58,62 @@ def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
     # -------------------------------------------------------------------------
     # Step 1: Parse XML tree
     # -------------------------------------------------------------------------
+
     tree = ET.parse(questions_xml_path)
     root = tree.getroot()
     assessments = []
 
-    # -------------------------------------------------------------------------
-    # Step 2: Extract each question and build assessment dicts
-    # -------------------------------------------------------------------------
     for q_elem in root.findall(".//question"):
         q_id = q_elem.get("id")
-        
-        # Get question type with fallback to "unknown" if missing
-        q_type = q_elem.get("type")
-        if not q_type:
-            q_type = "unknown"
-        
-        # Parse question name
+        if not q_id:
+            continue
+
+        qtype_elem = q_elem.find("qtype")
+        q_type = qtype_elem.text if qtype_elem is not None else "unknown"
+
         name_elem = q_elem.find("name")
-        name = name_elem.findtext("text", "") if name_elem is not None else ""
-        
-        # Parse question text (the actual prompt)
+        name = name_elem.text if name_elem is not None else ""
+
         questiontext_elem = q_elem.find("questiontext")
         questiontext = ""
         if questiontext_elem is not None:
-            text_elem = questiontext_elem.find("text")
-            if text_elem is not None and text_elem.text:
-                questiontext = text_elem.text
-        
-        # Parse point value (defaultgrade)
-        defaultgrade = float(q_elem.findtext("defaultgrade", "1"))
+            questiontext = "".join(questiontext_elem.itertext()).strip()
 
-        # Build base question dict
+        defaultmark_elem = q_elem.find("defaultmark")
+        points = float(defaultmark_elem.text) if defaultmark_elem is not None else 1.0
+
         question = {
             "question_id": str(uuid.uuid4()),
             "original_moodle_id": q_id,
-            "question_type": q_type,  # Now guaranteed to be a string
+            "question_type": q_type,
             "prompt_text": questiontext,
-            "points": defaultgrade,
+            "points": points,
             "answer_options": [],
             "correct_answers": [],
         }
 
-        # -------------------------------------------------------------------------
-        # Step 3: Parse answer options based on question type
-        # -------------------------------------------------------------------------
-        if q_type in ("multichoice", "truefalse"):
-            # Multiple choice: single correct answer (or multiple if single="0")
-            single = q_elem.findtext("single", "1") == "1"
-            for ans in q_elem.findall(".//answer"):
-                text_elem = ans.find("text")
-                text = text_elem.text if text_elem is not None else ""
-                fraction = float(ans.get("fraction", "0"))
-                is_correct = fraction > 0
-                question["answer_options"].append({
-                    "text": text,
-                    "is_correct": is_correct,
-                })
-                
-        elif q_type == "shortanswer":
-            # Short answer: case-sensitive text answers
-            for ans in q_elem.findall(".//answer"):
-                text_elem = ans.find("text")
-                text = text_elem.text if text_elem is not None else ""
-                fraction = float(ans.get("fraction", "0"))
-                if fraction > 0:
-                    question["correct_answers"].append(text)
-                    
-        elif q_type == "numerical":
-            # Numerical: numeric answer with optional tolerance
-            for ans in q_elem.findall(".//answer"):
-                text_elem = ans.find("text")
-                text = text_elem.text if text_elem is not None else ""
-                fraction = float(ans.get("fraction", "0"))
-                if fraction > 0:
-                    try:
-                        question["correct_answer"] = float(text)
-                    except ValueError:
-                        question["correct_answer"] = text
-                        
-        elif q_type in ("essay", "description"):
-            # Essay/description: no answer options, just store prompt
-            pass
-        
-        # -------------------------------------------------------------------------
-        # Step 4: Wrap question in assessment dict
-        # -------------------------------------------------------------------------
+        # --- Parse answers depending on type ---
+        if q_type == "multichoice":
+            plugin = q_elem.find("plugin_qtype_multichoice_question")
+            if plugin is not None:
+                for ans in plugin.findall(".//answer"):
+                    fraction_elem = ans.find("fraction")
+                    fraction = float(fraction_elem.text) if fraction_elem is not None else 0.0
+                    answertext_elem = ans.find("answertext")
+                    text = "".join(answertext_elem.itertext()).strip() if answertext_elem is not None else ""
+                    question["answer_options"].append({
+                        "text": text,
+                        "is_correct": fraction > 0,
+                    })
+        # Add other question types similarly...
+
         assessment_id = str(uuid.uuid4())
         assessments.append({
             "assessment_id": assessment_id,
             "title": name if name else f"Question {q_id}",
             "assessment_type": "quiz",
             "questions": [question],
-            "raw_fragment_id": None,
-            "original_question_ids": [q_id],  # for linking to quiz instances
+            "original_question_ids": [q_id],
         })
 
-    return assessments
+    return assessments   

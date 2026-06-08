@@ -3,10 +3,10 @@ Open edX Target Adapter, Converts canonical Course domain objects into
 Open edX export format (.tar.gz).
 
 This adapter handles:
--video Full course hierarchy (Chapter-> Sequential -> Vertical -> Components)
-- Assessments with questions and answer options
-- Asset file copying from Moodle backups
-- XML generation for all Open edX components (html, problem, video, etc.)
+Full course hierarchy (Chapter -> Sequential -> Vertical -> Components)
+Assessments with questions and answer options
+Asset file copying from Moodle backups
+XML generation for all Open edX components (html, problem, video, etc.)
 """
 
 import os
@@ -44,7 +44,7 @@ class OpenEdxTargetAdapter:
         self, 
         course: Course, 
         output_path: str, 
-        moodle_extracted_path: Optional[str] = None
+        source_extracted_path: Optional[str] = None
     ) -> str:
         """
         Generate an Open edX course export tarball from a canonical Course.
@@ -56,7 +56,7 @@ class OpenEdxTargetAdapter:
         Args:
             course: The canonical Course domain object to export
             output_path: Destination path for the .tar.gz file
-            moodle_extracted_path: Optional path to Moodle extract for copying assets
+            source_extracted_path: Optional path to source extraction for copying assets
             
         Returns:
             Absolute path to the generated .tar.gz export file
@@ -64,47 +64,32 @@ class OpenEdxTargetAdapter:
         Example:
              adapter = OpenEdxTargetAdapter()
              output = adapter.generate_export(course, "output/course.tar.gz")
-
         """
-        # -------------------------------------------------------------------------
         # Step 1: Initialize working directory and course state
-        # -------------------------------------------------------------------------
         self.course = course
         self.work_dir = Path("data/openedx_export") / uuid.uuid4().hex
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
-        # -------------------------------------------------------------------------
         # Step 2: Create Open edX directory structure
-        # -------------------------------------------------------------------------
         for subdir in ["chapter", "sequential", "vertical", "html", "problem", "video", "course", "asset"]:
             (self.work_dir / subdir).mkdir(exist_ok=True)
 
-        # -------------------------------------------------------------------------
         # Step 3: Generate root course.xml (course settings)
-        # -------------------------------------------------------------------------
         self._write_root_course_xml()
 
-        # -------------------------------------------------------------------------
         # Step 4: Generate actual course definition (course/{url_name}.xml)
-        # -------------------------------------------------------------------------
         self._write_actual_course_xml()
 
-        # -------------------------------------------------------------------------
         # Step 5: Process content nodes and generate XML for each hierarchy level
-        # -------------------------------------------------------------------------
         for node in course.content_nodes:
             if node.node_type == NodeType.CHAPTER:
                 self._write_chapter(node)
 
-        # -------------------------------------------------------------------------
-        # Step 6: Copy asset files from Moodle backup if provided
-        # -------------------------------------------------------------------------
-        if moodle_extracted_path:
-            self._copy_assets(Path(moodle_extracted_path))
+        # Step 6: Copy asset files from source extraction if provided
+        if source_extracted_path:
+            self._copy_assets(Path(source_extracted_path))
 
-        # -------------------------------------------------------------------------
         # Step 7: Package everything into a tar.gz archive
-        # -------------------------------------------------------------------------
         output_path = Path(output_path)
         with tarfile.open(output_path, "w:gz") as tar:
             tar.add(self.work_dir, arcname="course")
@@ -258,7 +243,7 @@ class OpenEdxTargetAdapter:
                 elem = ET.SubElement(root, "problem")
                 elem.set("url_name", self._get_url_name(comp.node_id))
                 
-                # Find the assessment linked to this component
+                # Try to find the assessment linked to this component
                 assessment = None
                 if comp.assessment_id:
                     assessment = next(
@@ -277,6 +262,9 @@ class OpenEdxTargetAdapter:
                         if opt.question_id in [q.question_id for q in questions]
                     ]
                     self._write_problem(comp, assessment, questions, answer_options)
+                elif comp.metadata.get("problem_data"):
+                    # Fallback: write problem directly from stored problem_data
+                    self._write_problem_from_data(comp, comp.metadata["problem_data"])
                 else:
                     # Fallback: write a placeholder problem
                     self._write_placeholder_problem(comp)
@@ -324,11 +312,11 @@ class OpenEdxTargetAdapter:
         Write problem XML with questions and answer options.
         
         Supports:
-        - multichoice: single-select (multiplechoiceresponse)
-        - truefalse: true/false (multiplechoiceresponse)
-        - shortanswer: text input (textinput)
-        - numerical: numerical input ( numericalinput)
-        - essay: open response (openassessment - not implemented, placeholder)
+        multichoice: single-select (multiplechoiceresponse)
+        truefalse: true/false (multiplechoiceresponse)
+        shortanswer: text input (textinput)
+        numerical: numerical input (numericalinput)
+        essay: open response (openassessment - not implemented, placeholder)
         
         Located at: work_dir/problem/{url_name}.xml
         
@@ -426,6 +414,56 @@ class OpenEdxTargetAdapter:
         
         self._write_xml(self.work_dir / "problem" / f"{url_name}.xml", root)
 
+    def _write_problem_from_data(self, comp: ContentNode, problem_data: dict):
+        """
+        Write problem XML directly from stored problem_data dict (fallback).
+        
+        This method is used when the assessment lookup fails (e.g., during 
+        round-trip migration where assessments are not yet linked). It writes
+        the problem XML using the data originally parsed from the source.
+        
+        Args:
+            comp: ContentNode with node_type=PROBLEM
+            problem_data: Dictionary containing parsed problem data with keys:
+                - assessment_title: str
+                - questions: list of dicts with 'type', 'prompt', 'answer_options', etc.
+        """
+        url_name = self._get_url_name(comp.node_id)
+        root = ET.Element("problem")
+        root.set("display_name", problem_data.get("assessment_title", comp.title or "Problem"))
+
+        for q in problem_data.get("questions", []):
+            if q["type"] in ("multi-select", "single-select", "truefalse"):
+                multiplechoiceresponse = ET.SubElement(root, "multiplechoiceresponse")
+                label = ET.SubElement(multiplechoiceresponse, "label")
+                label.text = q.get("prompt", "")
+                choicegroup = ET.SubElement(multiplechoiceresponse, "choicegroup", type="MultipleChoice")
+                for opt in q.get("answer_options", []):
+                    choice = ET.SubElement(choicegroup, "choice")
+                    choice.text = opt["text"]
+                    choice.set("correct", "true" if opt["is_correct"] else "false")
+            elif q["type"] == "text_input":
+                textinput = ET.SubElement(root, "textinput")
+                label = ET.SubElement(textinput, "label")
+                label.text = q.get("prompt", "")
+                response = ET.SubElement(textinput, "response")
+                response.set("correct_answer", ", ".join(q.get("correct_answers", [])))
+            elif q["type"] == "numerical":
+                numericalinput = ET.SubElement(root, "numericalinput")
+                label = ET.SubElement(numericalinput, "label")
+                label.text = q.get("prompt", "")
+                response = ET.SubElement(numericalinput, "response")
+                response.set("correct_answer", str(q.get("correct_answer", "")))
+            else:
+                # Generic placeholder
+                multiplechoiceresponse = ET.SubElement(root, "multiplechoiceresponse")
+                label = ET.SubElement(multiplechoiceresponse, "label")
+                label.text = f"{q.get('type', 'unknown')}: {q.get('prompt', 'Question')} (not fully converted)"
+                choice = ET.SubElement(multiplechoiceresponse, "choicegroup", "choice")
+                choice.text = "Review required"
+                choice.set("correct", "false")
+
+        self._write_xml(self.work_dir / "problem" / f"{url_name}.xml", root)
 
     def _write_placeholder_problem(self, comp: ContentNode):
         """
@@ -454,19 +492,19 @@ class OpenEdxTargetAdapter:
 
     def _write_video(self, comp: ContentNode):
         """
-        write video component xml.
+        Write video component xml.
         
-        handles three cases:
-        1. youtube videos (uses youtube_id attribute)
-        2. self-hosted video files (uses asset reference)
-        3. placeholder for unknown video types
+        Handles three cases:
+        1. YouTube videos (uses youtube_id attribute)
+        2. Self-hosted video files (uses asset reference)
+        3. Placeholder for unknown video types
         
-        args:
-            comp: contentnode with node_type=video and metadata
+        Args:
+            comp: ContentNode with node_type=VIDEO and metadata
         """
         url_name = self._get_url_name(comp.node_id)
         metadata = comp.metadata
-        root = et.element("video")
+        root = ET.Element("video")                  
         
         root.set("display_name", comp.title or "video")
         root.set("url_name", url_name)
@@ -474,83 +512,69 @@ class OpenEdxTargetAdapter:
         activity_type = metadata.get("activity_type", "")
         
         if activity_type == "youtube":
-            # youtube video - use youtube_id attribute
             youtube_id = metadata.get("youtube_id", "")
             if youtube_id:
                 root.set("youtube_id_1_0", youtube_id)
                 root.set("youtube", f"1.00:{youtube_id}")
             else:
-                # fallback: placeholder
                 root.set("youtube_id_1_0", "00000000000")
                 root.set("youtube", "1.00:00000000000")
                 
         elif activity_type == "video" or activity_type == "":
-            # self-hosted video file - use source element
             asset_id = metadata.get("asset_id")
-            
-            # find the asset to get the file path
-            asset_obj = none
+            asset_obj = None                        
             if self.course.assets:
                 asset_obj = next(
                     (a for a in self.course.assets if a.asset_id == asset_id),
-                    none
+                    None                            
                 )
             
             if asset_obj:
-                # use the asset path as the source
-                # note: in production, you'd need to upload the video to a public url
-                # and use that url in the source element
-                source = et.subelement(root, "source")
+                source = ET.SubElement(root, "source") 
                 source.set("src", f"asset:{asset_obj.path}")
-                
                 root.set("download_video", "true")
             else:
-                # placeholder for missing asset
-                source = et.subelement(root, "source")
+                source = ET.SubElement(root, "source")
                 source.set("src", "")
         
         else:
-            # unknown video type - create placeholder
-            source = et.subelement(root, "source")
+            source = ET.SubElement(root, "source")    
             source.set("src", "")
         
         self._write_xml(self.work_dir / "video" / f"{url_name}.xml", root)
 
-
-    def _copy_assets(self, moodle_extracted: Path):
+    def _copy_assets(self, source_extracted: Path):
         """
-        Copy asset files from Moodle backup to Open edX asset/ folder.
+        Copy asset files from source extraction to Open edX asset/ folder.
         
-        Copies files referenced in course.assets from the Moodle extract 
+        Copies files referenced in course.assets from the source extraction 
         directory to the Open edX export's asset folder for inclusion 
         in the final tarball.
         
         Args:
-            moodle_extracted: Path to extracted Moodle backup directory
+            source_extracted: Path to extracted source directory (e.g., Moodle backup)
         """
         asset_dir = self.work_dir / "asset"
         copied_assets = []
 
         for asset in self.course.assets:
-            # asset.path is like "files/3a/3ac87b9b..."
-            source = moodle_extracted / asset.path
+            source = source_extracted / asset.path
             if source.exists():
                 dest = asset_dir / source.name
                 dest.write_bytes(source.read_bytes())
                 copied_assets.append({
-                "asset_id": asset.asset_id,
-                "original_path": asset.path,
-                "copied_path": str(dest),
-                "mime_type": asset.mime_type,
-                "is_video": asset.metadata.get("is_video", False) if hasattr(asset, "metadata") else False,
-            })
+                    "asset_id": asset.asset_id,
+                    "original_path": asset.path,
+                    "copied_path": str(dest),
+                    "mime_type": asset.mime_type,
+                    "is_video": asset.metadata.get("is_video", False) if hasattr(asset, "metadata") else False,
+                })
 
         # Log copied assets for debugging
         if copied_assets:
             import json
             log_path = self.work_dir / "assets_copied.json"
             log_path.write_text(json.dumps(copied_assets, indent=2))
-
 
     def _write_xml(self, path: Path, root: ET.Element):
         """

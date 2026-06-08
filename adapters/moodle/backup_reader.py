@@ -83,16 +83,16 @@ class MoodleBackupReader:
 
         activities: Dict[str, Any] = {}
         for activity in information.findall(".//contents/activities/activity"):
-            cmid = activity.findtext("moduleid") or activity.findtext("cmid")  # cmid and moduleid are both used by Moodle
+            cmid = activity.findtext("moduleid") or activity.findtext("cmid")
             if not cmid:
                 continue
 
             activities[cmid] = {
                 "cmid": cmid,
-                "module_name": activity.findtext("module_name", ""),
+                "module_name": activity.findtext("modulename", "") or activity.findtext("module_name", ""),
                 "title": activity.findtext("title", ""),
                 "directory": activity.findtext("directory", ""),
-                "section_id": activity.findtext("section_id", ""),
+                "section_id": activity.findtext("sectionid", "") or activity.findtext("section_id", ""),
             }
 
         sections: List[Dict[str, Any]] = []
