@@ -424,56 +424,32 @@ class MoodleCourseParser:
         """
         Parse a Moodle 'quiz' activity.
         
-        Creates an assessment dict and appends it to the shared assessments list
-        so TransformService can build an Assessment domain object. The activity
-        node stores an assessment_id reference to link the two.
-        
-        Question instances are captured as lightweight stubs with point values.
-        Full question content (prompt text, answer options) lives in the question
-        bank and is parsed in _load_questions (Phase 2 concern).
+        Extracts the quiz title, intro, and the list of question IDs referenced
+        in the quiz. Does NOT create stub questions; actual questions are taken
+        from the question bank during transformation.
         
         Args:
             root: Parsed XML root element
             activity_info: Activity metadata from manifest
             
         Returns:
-            Dictionary with title, node_type=QUIZ, assessment_id, content_html,
+            Dictionary with title, node_type=QUIZ, content_html,
             and metadata.question_ids (list of question IDs from question bank)
         """
         inner = root.find("quiz") or root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
-        assessment_id = str(uuid.uuid4())
-
-        # Parse question instances (lightweight stubs)
-        questions = []
-        for qi in inner.findall(".//question_instance"):
-            questions.append({
-                "question_id": str(uuid.uuid4()),
-                "assessment_id": assessment_id,
-                "question_type": "unknown",
-                "prompt_text": None,
-                "points": float(qi.findtext("maxmark", "1") or "1"),
-            })
-
-        assessments.append({
-            "assessment_id": assessment_id,
-            "title": title,
-            "assessment_type": "quiz",
-            "questions": questions,
-        })
-
-        # Collect question IDs for linking to question bank
+        
+        # Collect question IDs from <question_instance> elements
         question_ids = []
         for qi in inner.findall(".//question_instance"):
             qid = qi.findtext("questionid")
             if qid:
                 question_ids.append(qid)
-
+        
         return {
             "title": title,
             "node_type": NodeType.QUIZ.value,
-            "assessment_id": assessment_id,
             "content_html": intro,
             "metadata": {
                 "question_ids": question_ids,
@@ -532,7 +508,7 @@ class MoodleCourseParser:
             asset_id = str(uuid.uuid4())
             filepath = record.get("filepath", "/").lstrip("/")
             assets.append({
-                "asset_id": asset_id,
+                "path": f"files/{contenthash[:2]}/{contenthash}",
                 "path": filepath + filename,
                 "mime_type": record.get("mimetype"),
                 "checksum": contenthash,
