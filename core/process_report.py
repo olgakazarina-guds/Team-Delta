@@ -83,7 +83,7 @@ class ProcessReporter:
             self.steps.append(ProcessStep(
                 name, StepStatus.FAILED, duration, f"{type(exc).__name__}: {exc}"
             ))
-            _log.error("✗ %s failed after %.3fs — %s", name, duration, exc)
+            _log.error("✗ %s failed after %.3fs - %s", name, duration, exc)
             raise
         else:
             duration = time.perf_counter() - start
@@ -127,12 +127,12 @@ class ProcessReporter:
         console.print(table)
         if self.succeeded:
             console.print(
-                f"[bold green]Process succeeded[/bold green] — "
+                f"[bold green]Process succeeded[/bold green] - "
                 f"{len(self.steps)} steps in {self.total_duration_s:.3f}s"
             )
         else:
             failed = sum(1 for s in self.steps if s.status is StepStatus.FAILED)
             console.print(
-                f"[bold red]Process failed[/bold red] — "
+                f"[bold red]Process failed[/bold red] - "
                 f"{failed} of {len(self.steps)} steps failed"
             )

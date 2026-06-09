@@ -16,8 +16,8 @@ Description:
     ``setup_logging()`` once, early in a CLI command, before any pipeline work runs.
 
     Two sinks (output destinations) are supported:
-    - a console handler (pretty, colourised via rich) — always on
-    - an optional rotating-free file handler — enabled by passing ``log_file``
+    - a console handler (pretty, colourised via rich) - always on
+    - an optional rotating-free file handler - enabled by passing ``log_file``
 
     The function is idempotent: calling it again replaces the handlers it added
     previously rather than stacking duplicates, so repeated CLI invocations inside
@@ -55,8 +55,8 @@ def setup_logging(level: Union[str, int] = "INFO", log_file: Optional[str] = Non
     """
     Configure the root logger and return the package logger ('lms_convert').
 
-    level    — minimum severity to emit (name or logging constant).
-    log_file — if given, a plain-text copy of every record (always at DEBUG)
+    level    - minimum severity to emit (name or logging constant).
+    log_file - if given, a plain-text copy of every record (always at DEBUG)
                is appended to this path; parent directories are created.
 
     Console output uses RichHandler for readable, colourised lines; the file
