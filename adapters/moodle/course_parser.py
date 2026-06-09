@@ -223,7 +223,7 @@ class MoodleCourseParser:
         Type-specific parsers add further keys (content_html, assessment_id,
         metadata, etc.). If the XML is missing, module is unrecognized, or
         the parser raises an exception, returns NodeType.UNKNOWN rather than
-        propagating the error — this ensures one malformed activity doesn't
+        propagating the error - this ensures one malformed activity doesn't
         abort the entire course parse.
         
         Args:
@@ -283,7 +283,7 @@ class MoodleCourseParser:
         return base
 
     # -------------------------------------------------------------------------
-    # Activity Parsers — return None on failure
+    # Activity Parsers - return None on failure
     # -------------------------------------------------------------------------
 
     def _parse_page(
@@ -471,7 +471,7 @@ class MoodleCourseParser:
         Only the primary content file is captured. Files with filename '.' are
         directory sentinel entries and are skipped. If the physical file is
         absent from files/ (draft or deleted), the asset still records the
-        contenthash — read_file_bytes handles missing bytes gracefully.
+        contenthash - read_file_bytes handles missing bytes gracefully.
         
         Args:
             root: Parsed XML root element
@@ -618,7 +618,7 @@ class MoodleCourseParser:
         Store a file as a raw XML fragment and return its fragment_id.
         
         Reads the file as raw text (not parsed XML) to preserve the original
-        formatting exactly — important for accuracy and debugging. The fragment
+        formatting exactly - important for accuracy and debugging. The fragment
         is appended to self.fragments for later inclusion in the course dict.
         
         Returns None if the file does not exist, so callers can treat a missing

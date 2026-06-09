@@ -18,6 +18,7 @@ Usage:
 ===============================================================================
 """
 
+import logging
 import tarfile
 import zipfile
 import xml.etree.ElementTree as ET
@@ -25,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import os
 
+logger = logging.getLogger(__name__)
 
 class MoodleBackupReader:
 
@@ -47,9 +49,11 @@ class MoodleBackupReader:
             is_gzip = (header == b'\x1f\x8b')
 
         if is_gzip:
+            logger.debug("Detected Gzip, extracting: %s", mbz_path)
             with tarfile.open(mbz_path, 'r:gz') as tar:
                 tar.extractall(target_path)
         else:
+            logger.debug("Detected Zip, extracting: %s", mbz_path)
             with zipfile.ZipFile(mbz_path, 'r') as zf:
                 zf.extractall(target_path)
 

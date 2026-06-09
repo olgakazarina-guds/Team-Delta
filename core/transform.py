@@ -12,6 +12,7 @@ Transforms parsed Open edX or Moodle data into canonical domain entities:
 """
 
 import uuid
+import logging
 from typing import Dict, Any, List, Optional
 
 from domain.entities import (
@@ -27,6 +28,7 @@ from domain.entities import (
 from domain.enums import SourceSystem, NodeType, AssessmentType, Severity
 from adapters.openedx.problem_parser import parse_problem
 
+logger = logging.getLogger(__name__)
 
 class TransformService:
     """
@@ -57,12 +59,16 @@ class TransformService:
         Raises:
             ValueError: If source_type is not supported
         """
+        logger.info("Transforming %s parse output to canonical IR (job %s)", source_type, job_id)
         if source_type == "openedx":
-            return self._transform_openedx(parsed, job_id)
-        if source_type == "moodle":
-            return self._transform_moodle(parsed, job_id)
-
-        raise ValueError(f"Unsupported source type: {source_type}")
+            course = self._transform_openedx(parsed, job_id)
+        elif source_type == "moodle":
+            course = self._transform_moodle(parsed, job_id)
+        else:
+            logger.error("Unsupported source type: %s", source_type)
+            raise ValueError(f"Unsupported source type: {source_type}")
+        logger.debug("Built course '%s' with %d top-level nodes, %d assets",course.title, len(course.content_nodes), len(course.assets),)
+        return course
 
     def _transform_openedx(self, parsed: Dict[str, Any], job_id: str) -> Course:
         """
