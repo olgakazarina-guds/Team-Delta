@@ -12,7 +12,7 @@ Usage:
 
 import typer
 
-from cli.commands import inspect_command, migrate_command
+from cli.commands import inspect_command, migrate_command, report_command
 
 # Create Typer application with help text
 app = typer.Typer(
@@ -33,7 +33,7 @@ def main() -> None:
 # Register commands
 app.command("inspect")(inspect_command)
 app.command("migrate")(migrate_command)
-
+app.command("report")(report_command)
 
 if __name__ == "__main__":
     app()

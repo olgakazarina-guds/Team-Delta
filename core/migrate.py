@@ -12,7 +12,7 @@ from adapters.moodle.target_adapter import MoodleTargetAdapter
 from adapters.openedx.target_adapter import OpenEdxTargetAdapter
 from adapters.moodle.target_adapter import MoodleTargetAdapter
 from domain.entities import Course
-
+from persistence.repositories import save_migration_job
 
 class MigrationService:
     """
@@ -82,3 +82,9 @@ class MigrationService:
         return self.moodle_target.generate_backup(
             course, output_path, source_extracted_path
         )
+
+    def migrate_to_openedx(self, course: Course, output_path: str, source_extracted_path: Optional[str] = None) -> str:
+        result_path = self.openedx_target.generate_export(course, output_path, source_extracted_path)
+        # Save job with target type 'openedx'
+        save_migration_job(course.course_id, course.source_system.value, "openedx", course, [], source_extracted_path)
+        return result_path
