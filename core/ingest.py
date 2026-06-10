@@ -14,10 +14,12 @@ class IngestService:
     def inspect(self, source_path: str, source_type: str = "openedx", work_dir: str = "data/extracted") -> Dict[str, Any]:
         # Generate job ID
         job_id = str(uuid.uuid4())
-        
+       
+        print("Before parse")
         # Parse source
         parsed = self.parse_service.parse(source_path, source_type, work_dir)
-        
+        print("After parse, parsed keys:", parsed.keys() if parsed else "None")
+
         # Transform to canonical course
         course = self.transform_service.transform(parsed, source_type, job_id)
         

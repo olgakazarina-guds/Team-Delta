@@ -11,7 +11,7 @@ Commands show course structure, transformation notes, and migration validation.
 import logging
 import json
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import typer
 
@@ -202,7 +202,7 @@ def _print_moodle_raw_structure(parsed: Dict[str, Any]) -> None:
 
 
 def _print_openedx_raw_structure(parsed: Dict[str, Any]) -> None:
-    """Print Open edX course raw structure (chapters → sequentials → verticals)."""
+    """Print Open edX course raw structure (chapters -> sequentials -> verticals)."""
     chapters = parsed.get("chapters", [])
 
     for chapter in chapters[:5]:

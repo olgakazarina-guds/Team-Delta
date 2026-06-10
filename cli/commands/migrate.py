@@ -1,9 +1,9 @@
 """
-Course Migration CLI - Migrate courses between Moodle and Open edX.
+Course Migration CLI – Migrate courses between Moodle and Open edX.
 
 Supports:
-- Moodle (.mbz) → Open edX (.tar.gz)
-- Open edX (.tar.gz) → Moodle (.mbz)
+- Moodle (.mbz) -> Open edX (.tar.gz)
+- Open edX (.tar.gz) -> Moodle (.mbz)
 
 Validates migration readiness before conversion and shows detailed progress.
 """
@@ -196,11 +196,8 @@ def _perform_migration(course: Any, target: str, output: str, result: dict) -> s
     """
     Perform the actual migration to target LMS and return the output path.
 
-    Args:
-        course: Canonical Course entity
-        target: Target LMS ('openedx' or 'moodle')
-        output: Output file path
-        result: Inspection result containing extracted_path
+    Returns:
+        Path to the output file
 
     Returns:
         The path the converted archive was written to.
@@ -241,29 +238,25 @@ def _perform_migration(course: Any, target: str, output: str, result: dict) -> s
 
 def _print_migration_summary(course: Any, notes: List[Any], output_path: str) -> None:
     """Print migration summary with content statistics."""
+    def count_node_type(nodes, target_type):
+        count = 0
+        for node in nodes:
+            if node.node_type.value == target_type:
+                count += 1
+            count += count_node_type(node.children, target_type)
+        return count
+
     typer.echo("\n[ Migration Summary ]")
     typer.echo(f"Output File: {output_path}")
     typer.echo(f"Course Title: {course.title}")
 
     typer.echo("\nMigrated Content:")
-    typer.echo(
-        f"  - Chapters: {sum(1 for n in course.content_nodes if n.node_type.value == 'chapter')}"
-    )
-    typer.echo(
-        f"  - Sequentials: {sum(1 for n in course.content_nodes if n.node_type.value == 'sequential')}"
-    )
-    typer.echo(
-        f"  - Verticals: {sum(1 for n in course.content_nodes if n.node_type.value == 'vertical')}"
-    )
-    typer.echo(
-        f"  - HTML Components: {sum(1 for n in course.content_nodes if n.node_type.value == 'html')}"
-    )
-    typer.echo(
-        f"  - Problem Components: {sum(1 for n in course.content_nodes if n.node_type.value == 'problem')}"
-    )
-    typer.echo(
-        f"  - Video Components: {sum(1 for n in course.content_nodes if n.node_type.value == 'video')}"
-    )
+    typer.echo(f"  - Chapters: {count_node_type(course.content_nodes, 'chapter')}")
+    typer.echo(f"  - Sequentials: {count_node_type(course.content_nodes, 'sequential')}")
+    typer.echo(f"  - Verticals: {count_node_type(course.content_nodes, 'vertical')}")
+    typer.echo(f"  - HTML Components: {count_node_type(course.content_nodes, 'html')}")
+    typer.echo(f"  - Problem Components: {count_node_type(course.content_nodes, 'problem')}")
+    typer.echo(f"  - Video Components: {count_node_type(course.content_nodes, 'video')}")
     typer.echo(f"  - Assessments: {len(course.assessments)}")
     typer.echo(f"  - Questions: {len(course.questions)}")
     typer.echo(f"  - Assets: {len(course.assets)}")
@@ -272,7 +265,6 @@ def _print_migration_summary(course: Any, notes: List[Any], output_path: str) ->
         typer.echo(f"\nValidation Notes: {len(notes)} warnings/errors (see above)")
 
     typer.echo(f"\nMigration successful! Output saved to: {output_path}")
-
 
 def _print_node_tree(node: Any, indent: int = 0) -> None:
     """
