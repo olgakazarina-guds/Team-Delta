@@ -1,9 +1,13 @@
+import logging
 from domain.entities import Course, MappingNote
 from domain.enums import Severity
 import uuid
 
+logger = logging.getLogger(__name__)
+
 class ValidationService:
     def validate(self, course: Course) -> list:
+        logger.info("Validating course '%s'", course.title)
         notes = []
         
         # Check if course has any content nodes
@@ -16,6 +20,7 @@ class ValidationService:
                 source_fragment_id=None,
                 fallback_used=False
             ))
+            logger.debug("Validation found no notes" )
             return notes  # Nothing else to validate
         
         # Check for chapter → sequential → vertical hierarchy
@@ -185,7 +190,7 @@ class ValidationService:
             source_fragment_id=None,
             fallback_used=False
         ))
-        
+        logger.debug("Validation produced %d note(s)", len(notes))
         return notes
 
     def _iterate_nodes(self, nodes):

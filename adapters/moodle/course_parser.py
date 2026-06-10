@@ -214,7 +214,7 @@ class MoodleCourseParser:
         Type-specific parsers add further keys (content_html, assessment_id,
         metadata, etc.). If the XML is missing, module is unrecognized, or
         the parser raises an exception, returns NodeType.UNKNOWN rather than
-        propagating the error — this ensures one malformed activity doesn't
+        propagating the error - this ensures one malformed activity doesn't
         abort the entire course parse.
         
         Args:
@@ -280,7 +280,9 @@ class MoodleCourseParser:
         base.update(result)
         return base
 
-    # Activity Parsers, return None on failure
+    # -------------------------------------------------------------------------
+    # Activity Parsers - return None on failure
+    # -------------------------------------------------------------------------
 
     def _parse_page(
         self, root, activity_info, extracted, manifest, assessments, assets
@@ -466,7 +468,29 @@ class MoodleCourseParser:
             },
         }
 
-    def _parse_resource(self, root, activity_info, extracted, manifest, assessments, assets):
+    def _parse_resource(
+        self, root, activity_info, extracted, manifest, assessments, assets
+    ):
+        """
+        Parse a Moodle 'resource' activity (downloadable file).
+        
+        Resolution chain:
+          1. Read inforef.xml to get file ID(s) for this activity
+          2. Look up each ID in manifest.file_records to get contenthash
+          3. Create an asset dict for the first valid file found
+        
+        Only the primary content file is captured. Files with filename '.' are
+        directory sentinel entries and are skipped. If the physical file is
+        absent from files/ (draft or deleted), the asset still records the
+        contenthash - read_file_bytes handles missing bytes gracefully.
+        
+        Args:
+            root: Parsed XML root element
+            activity_info: Activity metadata from manifest
+            
+        Returns:
+            Dictionary with title, node_type=ACTIVITY, and metadata.asset_id
+        """
         inner = root.find("resource") or root
         title = inner.findtext("name", activity_info.get("title", ""))
 
@@ -737,7 +761,7 @@ class MoodleCourseParser:
         Store a file as a raw XML fragment and return its fragment_id.
         
         Reads the file as raw text (not parsed XML) to preserve the original
-        formatting exactly — important for accuracy and debugging. The fragment
+        formatting exactly - important for accuracy and debugging. The fragment
         is appended to self.fragments for later inclusion in the course dict.
         
         Returns None if the file does not exist, so callers can treat a missing
