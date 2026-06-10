@@ -153,3 +153,13 @@ class Course(BaseModel):
     raw_fragments: List[RawFragment] = []
     mapping_notes: List[MappingNote] = []
     metadata: Dict[str, Any] = {}
+
+class ScormAsset(Asset):
+    """SCORM package asset (extends Asset with SCORM-specific fields)."""
+    original_zip_path: str
+    version: str = ""
+    launch: Optional[str] = None
+    skipview: Optional[str] = None
+    auto: Optional[str] = None
+    grademethod: Optional[str] = None
+    maxgrade: Optional[str] = None
