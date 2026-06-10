@@ -38,7 +38,7 @@ class OpenEdxTargetAdapter:
         """Initialize the adapter with empty state."""
         self.work_dir: Optional[Path] = None
         self.course: Optional[Course] = None
-        self.node_id_map: Dict[str, str] = {}  # node_id -> url_name mapping
+        self.node_id_map: Dict[str, str] = {}
 
     def generate_export(
         self, 
@@ -71,7 +71,7 @@ class OpenEdxTargetAdapter:
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
         # Step 2: Create Open edX directory structure
-        for subdir in ["chapter", "sequential", "vertical", "html", "problem", "video", "course", "asset"]:
+        for subdir in ["chapter", "sequential", "vertical", "html", "problem", "video", "openassessment", "discussion", "course", "asset"]:
             (self.work_dir / subdir).mkdir(exist_ok=True)
 
         # Step 3: Generate root course.xml (course settings)
@@ -164,7 +164,7 @@ class OpenEdxTargetAdapter:
 
     def _write_chapter(self, node: ContentNode):
         """
-        Write XML for a chapter (Chapter → Sequential hierarchy).
+        Write XML for a chapter (Chapter -> Sequential hierarchy).
         
         Creates chapter.xml with sequential references and recursively 
         processes all sequential children.
@@ -191,7 +191,7 @@ class OpenEdxTargetAdapter:
 
     def _write_sequential(self, node: ContentNode):
         """
-        Write XML for a sequential (Sequential → Vertical hierarchy).
+        Write XML for a sequential (Sequential -> Vertical hierarchy).
         
         Creates sequential.xml with vertical references and recursively 
         processes all vertical children.
@@ -263,7 +263,7 @@ class OpenEdxTargetAdapter:
                     ]
                     self._write_problem(comp, assessment, questions, answer_options)
                 elif comp.metadata.get("problem_data"):
-                    # Fallback: write problem directly from stored problem_data
+                    # Fallback: Let write the problem directly from stored problem_data
                     self._write_problem_from_data(comp, comp.metadata["problem_data"])
                 else:
                     # Fallback: write a placeholder problem
@@ -274,7 +274,38 @@ class OpenEdxTargetAdapter:
                 elem = ET.SubElement(root, "video")
                 elem.set("url_name", self._get_url_name(comp.node_id))
                 self._write_video(comp)
-        
+
+            elif comp.node_type == NodeType.SCORM:
+                elem = ET.SubElement(root, "scorm")
+                elem.set("url_name", self._get_url_name(comp.node_id))
+                self._write_scorm(comp)
+            
+            elif comp.node_type == NodeType.OPENASSESSMENT:
+                # First, add an HTML component to display the prompt text
+                if comp.metadata.get("content_html"):
+                    html_prompt = ContentNode(
+                        node_id=str(uuid.uuid4()),
+                        node_type=NodeType.HTML,
+                        title="Workshop Description",
+                        parent_id=node.node_id,
+                        position=len(node.children),  # append after existing components
+                        metadata={"content_html": comp.metadata["content_html"]},
+                    )
+                    self._write_html(html_prompt)
+                    # Add the html reference in the vertical
+                    html_elem = ET.SubElement(root, "html")
+                    html_elem.set("url_name", self._get_url_name(html_prompt.node_id))
+                
+                # Then add the openassessment component
+                elem = ET.SubElement(root, "openassessment")
+                elem.set("url_name", self._get_url_name(comp.node_id))
+                self._write_openassessment(comp)
+
+            elif comp.node_type == NodeType.FORUM:
+                elem = ET.SubElement(root, "discussion")
+                elem.set("url_name", self._get_url_name(comp.node_id))
+                self._write_discussion(comp)
+
         self._write_xml(self.work_dir / "vertical" / f"{url_name}.xml", root)
 
     def _write_html(self, comp: ContentNode):
@@ -295,7 +326,7 @@ class OpenEdxTargetAdapter:
         html_path = self.work_dir / "html" / f"{url_name}.html"
         html_path.write_text(content, encoding="utf-8")
         
-        # Write .xml wrapper (references the html file)
+        # Write .xml wrapper
         root = ET.Element("html")
         root.set("display_name", comp.title or "HTML")
         root.set("filename", f"{url_name}.html")
@@ -543,6 +574,35 @@ class OpenEdxTargetAdapter:
         
         self._write_xml(self.work_dir / "video" / f"{url_name}.xml", root)
 
+    def _write_scorm(self, comp: ContentNode):
+        url_name = self._get_url_name(comp.node_id)
+        metadata = comp.metadata
+        scorm_settings = metadata.get("scorm_settings", {})
+        asset_id = metadata.get("asset_id")
+
+        scorm_asset = next((a for a in self.course.assets if a.asset_id == asset_id), None)
+        if not scorm_asset:
+            self._write_placeholder_scorm(comp)
+            return
+
+        # Create the SCORM XBlock XML structure
+        root = ET.Element("scormxblock")
+        root.set("display_name", comp.title or "SCORM Package")
+        root.set("scorm_file", scorm_asset.path)
+        root.set("scorm_version", scorm_settings.get("version", ""))
+        root.set("has_score", "true")  # Assuming it's graded
+        root.set("weight", scorm_settings.get("maxgrade", "1"))
+
+        self._write_xml(self.work_dir / "scorm" / f"{url_name}.xml", root)
+
+    def _write_placeholder_scorm(self, comp: ContentNode):
+        # Fallback for when the asset is missing
+        url_name = self._get_url_name(comp.node_id)
+        root = ET.Element("scormxblock")
+        root.set("display_name", comp.title or "Missing SCORM Package")
+        root.set("scorm_file", "")
+        self._write_xml(self.work_dir / "scorm" / f"{url_name}.xml", root)       
+
     def _copy_assets(self, source_extracted: Path):
         """
         Copy asset files from source extraction to Open edX asset/ folder.
@@ -588,3 +648,49 @@ class OpenEdxTargetAdapter:
         """
         tree = ET.ElementTree(root)
         tree.write(path, encoding="utf-8", xml_declaration=True)
+
+    def _write_openassessment(self, comp: ContentNode):
+        """
+        Write an Open edX openassessment (ORA) component.
+        """
+        url_name = self._get_url_name(comp.node_id)
+        root = ET.Element("openassessment")
+        root.set("display_name", comp.title or "Peer Assessment")
+        root.set("submission_start", "2001-01-01T00:00:00+00:00")
+        root.set("submission_due", "2029-01-01T00:00:00+00:00")
+        root.set("text_response", "required")
+        root.set("text_response_editor", "tinymce")
+        root.set("allow_latex", "false")
+
+        # Add the prompt (content_html)
+        prompts = ET.SubElement(root, "prompts")
+        prompt = ET.SubElement(prompts, "prompt")
+        description = ET.SubElement(prompt, "description")
+        description.text = comp.metadata.get("content_html", comp.title or "Peer assessment prompt")
+        description.set("format", "html")
+
+        # Add a simple rubric
+        rubric = ET.SubElement(root, "rubric")
+        criterion = ET.SubElement(rubric, "criterion")
+        criterion.set("feedback", "optional")
+        name = ET.SubElement(criterion, "name")
+        name.text = "0"
+        label = ET.SubElement(criterion, "label")
+        label.text = "Quality"
+        prompt_rubric = ET.SubElement(criterion, "prompt")
+        prompt_rubric.text = "Evaluate the response based on clarity, evidence, and reasoning."
+
+        self._write_xml(self.work_dir / "openassessment" / f"{url_name}.xml", root)
+
+    def _write_discussion(self, comp: ContentNode):
+        """Write an Open edX discussion component (forum)."""
+        url_name = self._get_url_name(comp.node_id)
+        root = ET.Element("discussion")
+        root.set("discussion_id", url_name)
+        root.set("display_name", comp.title or "Discussion")
+        # The discussion component in OLX expects a <discussion> element with optional attributes.
+        # To include a description, I will add a <description> sub-element.
+        if comp.metadata.get("content_html"):
+            desc = ET.SubElement(root, "description")
+            desc.text = comp.metadata.get("content_html")
+        self._write_xml(self.work_dir / "discussion" / f"{url_name}.xml", root)

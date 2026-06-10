@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from .backup_reader import MoodleBackupReader
 from domain.enums import NodeType
+from domain.entities import ScormAsset
 
 class MoodleCourseParser:
     """
@@ -68,9 +69,7 @@ class MoodleCourseParser:
             >>> print(course_dict["course_title"])
             "History of Russia in Revolution"
         """
-        # -------------------------------------------------------------------------
         # Step 1: Extract archive and read manifest
-        # -------------------------------------------------------------------------
         extracted = self.reader.extract_archive(mbz_path, work_dir)
         manifest = self.reader.read_manifest(extracted)
 
@@ -80,9 +79,7 @@ class MoodleCourseParser:
         lang = "en"
         course_id = ""
 
-        # -------------------------------------------------------------------------
         # Step 2: Read course/course.xml for authoritative metadata
-        # -------------------------------------------------------------------------
         # The manifest header snapshot may be stale if the course was renamed 
         # after backup, so course/course.xml is the authoritative source.
         course_root = self.reader.read_xml(extracted, "course/course.xml")
@@ -93,21 +90,15 @@ class MoodleCourseParser:
             course_id = course_root.findtext("id", "")
             self._store_fragment(extracted, "course/course.xml")
 
-        # -------------------------------------------------------------------------
         # Step 3: Initialize containers for course data
-        # -------------------------------------------------------------------------
         sections: List[Dict[str, Any]] = []
         assessments: List[Dict[str, Any]] = []
         assets: List[Dict[str, Any]] = []
         
-        # -------------------------------------------------------------------------
         # Step 4: Load question bank assessments from questions.xml
-        # -------------------------------------------------------------------------
         questions_assessments = self._load_questions(extracted)
 
-        # -------------------------------------------------------------------------
         # Step 5: Parse all sections and their activities
-        # -------------------------------------------------------------------------
         for pos, section_info in enumerate(manifest["sections"]):
             section_dict = self._parse_section(
                 extracted, section_info, manifest, pos, assessments, assets
@@ -252,6 +243,7 @@ class MoodleCourseParser:
         }
 
         # Dispatch table for module-specific parsers
+
         dispatch = {
             "page": self._parse_page,
             "label": self._parse_label,
@@ -260,7 +252,13 @@ class MoodleCourseParser:
             "quiz": self._parse_quiz,
             "resource": self._parse_resource,
             "scorm": self._parse_scorm,
-            "videofile": self._parse_video,
+            "choice": self._parse_choice,
+            "book": self._parse_book,
+            "glossary": self._parse_glossary,
+            "wiki": self._parse_wiki,
+            "assign": self._parse_assign,
+            "workshop": self._parse_workshop,
+            "lesson": self._parse_lesson,
         }
 
         # Handle missing XML or unrecognized module type
@@ -282,9 +280,7 @@ class MoodleCourseParser:
         base.update(result)
         return base
 
-    # -------------------------------------------------------------------------
-    # Activity Parsers — return None on failure
-    # -------------------------------------------------------------------------
+    # Activity Parsers, return None on failure
 
     def _parse_page(
         self, root, activity_info, extracted, manifest, assessments, assets
@@ -335,11 +331,24 @@ class MoodleCourseParser:
         inner = root.find("label") or root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
-        return {
-            "title": title,
-            "node_type": NodeType.HTML.value,
-            "content_html": intro,
-        }
+        # Check if intro contains a YouTube link
+        import re
+        youtube_pattern = r'(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})'
+        match = re.search(youtube_pattern, intro)
+        if match:
+            youtube_id = match.group(1)
+            return {
+                "title": title,
+                "node_type": NodeType.VIDEO.value,
+                "metadata": {"activity_type": "youtube", "youtube_id": youtube_id, "externalurl": match.group(0)},
+                "content_html": intro  # Keep original as fallback
+            }
+        else:
+            return {
+                "title": title,
+                "node_type": NodeType.HTML.value,
+                "content_html": intro,
+            }
 
     def _parse_url(
         self, root, activity_info, extracted, manifest, assessments, assets
@@ -457,35 +466,14 @@ class MoodleCourseParser:
             },
         }
 
-    def _parse_resource(
-        self, root, activity_info, extracted, manifest, assessments, assets
-    ):
-        """
-        Parse a Moodle 'resource' activity (downloadable file).
-        
-        Resolution chain:
-          1. Read inforef.xml to get file ID(s) for this activity
-          2. Look up each ID in manifest.file_records to get contenthash
-          3. Create an asset dict for the first valid file found
-        
-        Only the primary content file is captured. Files with filename '.' are
-        directory sentinel entries and are skipped. If the physical file is
-        absent from files/ (draft or deleted), the asset still records the
-        contenthash — read_file_bytes handles missing bytes gracefully.
-        
-        Args:
-            root: Parsed XML root element
-            activity_info: Activity metadata from manifest
-            
-        Returns:
-            Dictionary with title, node_type=ACTIVITY, and metadata.asset_id
-        """
+    def _parse_resource(self, root, activity_info, extracted, manifest, assessments, assets):
         inner = root.find("resource") or root
         title = inner.findtext("name", activity_info.get("title", ""))
 
         file_ids = self.reader.read_inforef(extracted, activity_info["directory"])
         asset_id = None
         is_video = False
+        download_link = None
         for fid in file_ids:
             record = manifest["file_records"].get(fid)
             if not record:
@@ -496,34 +484,48 @@ class MoodleCourseParser:
             if not contenthash or not filename or filename == ".":
                 continue
 
-            # Check if this is a video file
+            # Check if video
             if mimetype and "video" in mimetype.lower():
                 is_video = True
             elif not mimetype:
-                # Fallback: check file extension
                 ext = filename.lower().split(".")[-1] if "." in filename else ""
                 if ext in ("mp4", "webm", "ogg", "mov", "avi"):
                     is_video = True
 
             asset_id = str(uuid.uuid4())
-            filepath = record.get("filepath", "/").lstrip("/")
+            # Store asset with correct path
             assets.append({
+                "asset_id": asset_id,
                 "path": f"files/{contenthash[:2]}/{contenthash}",
-                "path": filepath + filename,
-                "mime_type": record.get("mimetype"),
+                "mime_type": mimetype,
                 "checksum": contenthash,
+                "original_filename": filename,
                 "is_video": is_video,
             })
-            break  # primary file only
+            # Create download link for non-video resources
+            if not is_video:
+                download_link = f'<p><a href="/static/asset/{filename}">Download {filename}</a></p>'
+            break
 
-        return {
-            "title": title,
-            "node_type": NodeType.VIDEO.value if is_video else NodeType.ACTIVITY.value,
-            "metadata": {
-                "activity_type": "video" if is_video else "resource", 
-                "asset_id": asset_id,
-            },
-        }
+        if is_video:
+            return {
+                "title": title,
+                "node_type": NodeType.VIDEO.value,
+                "metadata": {"activity_type": "video", "asset_id": asset_id},
+            }
+        else:
+            # Return as HTML with download link
+            content = f"<h3>{title}</h3>"
+            if download_link:
+                content += download_link
+            else:
+                content += "<p>No file available.</p>"
+            return {
+                "title": title,
+                "node_type": NodeType.HTML.value,
+                "content_html": content,
+                "metadata": {"activity_type": "resource", "asset_id": asset_id},
+            }
 
     def _parse_scorm(
         self, root, activity_info, extracted, manifest, assessments, assets
@@ -542,12 +544,131 @@ class MoodleCourseParser:
         Returns:
             Dictionary with title, node_type=SCORM, and metadata.activity_type
         """
+        # Read the SCORM settings from scorm.xml
         inner = root.find("scorm") or root
         title = inner.findtext("name", activity_info.get("title", ""))
+        scorm_settings = {
+            "version": inner.findtext("version", ""),
+            "launch": inner.findtext("launch", ""),
+            "skipview": inner.findtext("skipview", ""),
+            "auto": inner.findtext("auto", ""),
+            "grademethod": inner.findtext("grademethod", ""),
+            "maxgrade": inner.findtext("maxgrade", ""),
+        }
+
+        # Find the SCORM zip file in the backup structure
+        activity_dir = activity_info["directory"]
+        zip_path = extracted / activity_dir / "package.zip"
+        if not zip_path.exists():
+            zip_path = extracted / activity_dir / "package"
+        
+        if zip_path.exists():
+            # Create a canonical ScormAsset object
+            scorm_asset = ScormAsset(
+                asset_id=str(uuid.uuid4()),
+                course_id=activity_info.get("course_id", ""),
+                path=str(zip_path.relative_to(extracted)),
+                mime_type="application/zip",
+                checksum="",
+                original_zip_path=str(zip_path.relative_to(extracted)),
+                version=scorm_settings.get("version", ""),
+            )
+            assets.append(scorm_asset)
+
+            return {
+                "title": title,
+                "node_type": NodeType.SCORM.value,
+                "metadata": {"scorm_settings": scorm_settings, "asset_id": scorm_asset.asset_id},
+            }
+        else:
+            return {
+                "title": title,
+                "node_type": NodeType.HTML.value,
+                "metadata": {"content_html": f"<p>Missing SCORM package for activity: {title}</p>"},
+            }
+
+    def _parse_choice(self, root, activity_info, extracted, manifest, assessments, assets):
+        inner = root.find("choice") or root
+        title = inner.findtext("name", activity_info.get("title", ""))
+        intro = inner.findtext("intro", "")
         return {
             "title": title,
-            "node_type": NodeType.SCORM.value,
-            "metadata": {"activity_type": "scorm"},
+            "node_type": NodeType.HTML.value,
+            "content_html": f"<h3>Choice activity: {title}</h3>{intro}",
+        }
+
+    def _parse_book(self, root, activity_info, extracted, manifest, assessments, assets):
+        inner = root.find("book") or root
+        title = inner.findtext("name", activity_info.get("title", ""))
+        intro = inner.findtext("intro", "")
+        # Parse chapters
+        chapters = []
+        for ch in inner.findall(".//chapter"):
+            ch_title = ch.findtext("title", "")
+            ch_content = ch.findtext("content", "")
+            chapters.append(f"<h4>{ch_title}</h4>{ch_content}")
+        chapters_html = "\n".join(chapters) if chapters else "<p>No chapters found.</p>"
+        full_html = f"<h3>{title}</h3>{intro}<hr/>{chapters_html}"
+        return {
+            "title": title,
+            "node_type": NodeType.HTML.value,
+            "content_html": full_html,
+        }
+
+    def _parse_glossary(self, root, activity_info, extracted, manifest, assessments, assets):
+        inner = root.find("glossary") or root
+        title = inner.findtext("name", activity_info.get("title", ""))
+        intro = inner.findtext("intro", "")
+        return {
+            "title": title,
+            "node_type": NodeType.HTML.value,
+            "content_html": f"<h3>Glossary: {title}</h3>{intro}",
+        }
+
+    def _parse_wiki(self, root, activity_info, extracted, manifest, assessments, assets):
+        inner = root.find("wiki") or root
+        title = inner.findtext("name", activity_info.get("title", ""))
+        intro = inner.findtext("intro", "")
+        return {
+            "title": title,
+            "node_type": NodeType.HTML.value,
+            "content_html": f"<h3>Wiki: {title}</h3>{intro}",
+        }
+
+    def _parse_assign(self, root, activity_info, extracted, manifest, assessments, assets):
+        inner = root.find("assign") or root
+        title = inner.findtext("name", activity_info.get("title", ""))
+        intro = inner.findtext("intro", "")
+        return {
+            "title": title,
+            "node_type": NodeType.HTML.value,
+            "content_html": f"<h3>Assignment: {title}</h3>{intro}",
+        }
+
+    def _parse_workshop(self, root, activity_info, extracted, manifest, assessments, assets):
+        inner = root.find("workshop") or root
+        title = inner.findtext("name", activity_info.get("title", ""))
+        intro = inner.findtext("intro", "")
+        # Workshop in Moodle is a peer assessment activity.
+        # Let Map it to Open edX openassessment block.
+        return {
+            "title": title,
+            "node_type": NodeType.OPENASSESSMENT.value,
+            "content_html": intro,  # Will be used as the prompt
+            "metadata": {
+                "activity_type": "workshop",
+                "moodle_workshop_id": inner.findtext("id", ""),
+            },
+        }
+
+    def _parse_lesson(self, root, activity_info, extracted, manifest, assessments, assets):
+        inner = root.find("lesson") or root
+        title = inner.findtext("name", activity_info.get("title", ""))
+        intro = inner.findtext("intro", "")
+        return {
+            "title": title,
+            "node_type": NodeType.HTML.value,
+            "content_html": f"<h3>Lesson: {title}</h3>{intro}",
         }
 
     def _parse_video(
@@ -609,9 +730,7 @@ class MoodleCourseParser:
             },
         }
 
-    # -------------------------------------------------------------------------
     # Fragment Helpers
-    # -------------------------------------------------------------------------
 
     def _store_fragment(self, extracted: Path, relative_path: str) -> Optional[str]:
         """
@@ -648,9 +767,7 @@ class MoodleCourseParser:
         })
         return fragment_id
 
-    # -------------------------------------------------------------------------
     # Question Bank Parsing
-    # -------------------------------------------------------------------------
 
     def _load_questions(self, extracted: Path) -> List[Dict[str, Any]]:
         """
@@ -698,9 +815,7 @@ class MoodleCourseParser:
         return parse_questions(str(questions_xml))
 
 
-# -------------------------------------------------------------------------
 # Module-Level Helpers
-# -------------------------------------------------------------------------
 
 def _join_html(*parts: str) -> str:
     """
