@@ -5,10 +5,9 @@ import os
 from pathlib import Path
 from core.ingest import IngestService
 from core.migrate import MigrationService
-from persistence.repositories import get_job, init_db
 from domain.entities import Course
 from domain.enums import NodeType
-from persistence.repositories import save_migration_job
+from persistence.repositories import get_job, save_job, save_migration_job, init_db
 
 # Page setup
 st.set_page_config(page_title="LMS Converter", layout="wide")
@@ -173,7 +172,7 @@ def render_structure(course):
         st.info("No content nodes found.")
         return
     for node in content_nodes:
-        render_content_node(node)
+        render_content_node(node)    
 
 def render_warnings(report):
     if not report:
@@ -379,7 +378,6 @@ def run_migration():
     output_filename = st.session_state.get("output_filename", "export.tar.gz")
     output_directory = st.session_state.get("output_directory", str(Path.home()))
     detailed = st.session_state.get("detailed", False)
-
     output_path = os.path.join(output_directory, output_filename)
     inspection = st.session_state.inspection_result
     if not inspection:
@@ -399,6 +397,7 @@ def run_migration():
         elif target_lms == "moodle":
             with st.spinner("Converting to Moodle format..."):
                 output_file = migrator.migrate_to_moodle(course, output_path, source_extracted_path=extracted_path)
+
         else:
             st.error(f"Unsupported target: {target_lms}")
             return
@@ -472,7 +471,7 @@ with col_inspect:
 
 with col_migrate:
     if st.session_state.inspection_result is not None:
-        if st.button("Migrate", type="secondary", key="migrate_btn"):
+        if st.button("Migrate", type="secondary"):
             migrate_dialog()
     else:
         st.button("Migrate", disabled=True, help="Inspect a course first", key="migrate_btn_disabled")

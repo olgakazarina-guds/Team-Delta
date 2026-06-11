@@ -8,6 +8,7 @@ Supports:
 Commands show course structure, transformation notes, and migration validation.
 """
 
+import logging
 import json
 from pathlib import Path
 from typing import Any, Dict, List
@@ -15,70 +16,105 @@ from typing import Any, Dict, List
 import typer
 
 from core.ingest import IngestService
+from core.logging_conf import setup_logging
+from core.process_report import ProcessReporter
 
+logger = logging.getLogger(__name__)
 
 def inspect_command(
-    path: str = typer.Argument(
-        ..., help="Path to course file (.mbz for Moodle, .tar.gz for Open edX)"
-    ),
-    source: str = typer.Option(
-        None, "--source", "-s", help="Source LMS: 'moodle' or 'openedx' (auto-detected)"
-    ),
-    show_source: bool = typer.Option(
-        False, "--show-source", help="Show original course structure (before transformation)"
-    ),
-    validate_for: str = typer.Option(
-        None, "--validate-for", "-v", help="Validate for migration to target LMS"
-    ),
-    output: str = typer.Option(
-        None, "--output", "-o", help="Save detailed report as JSON file"
-    ),
-    verbose: bool = typer.Option(
-        False, "--verbose", "-d", help="Show everything"
-    ),
+        path: str = typer.Argument(
+            ..., help="Path to course file (.mbz for Moodle, .tar.gz for Open edX)"
+        ),
+        source: str = typer.Option(
+            None, "--source", "-s", help="Source LMS: 'moodle' or 'openedx' (auto-detected)"
+        ),
+        show_source: bool = typer.Option(
+            False, "--show-source", help="Show original course structure (before transformation)"
+        ),
+        validate_for: str = typer.Option(
+            None, "--validate-for", "-v", help="Validate for migration to target LMS"
+        ),
+        output: str = typer.Option(
+            None, "--output", "-o", help="Save detailed report as JSON file"
+        ),
+        verbose: bool = typer.Option(
+            False, "--verbose", "-d", help="Show everything"
+        ),
+        log_level: str = typer.Option(
+            "INFO", "--log-level", "-l", help="Console log level: DEBUG, INFO, WARNING, ERROR"
+        ),
+        log_file: str = typer.Option(
+            None, "--log-file", help="Also write a full DEBUG log to this file"
+        ),
+        report: bool = typer.Option(
+            False, "--report", "-r", help="Print a per-step success/failure report at the end"
+        ),
 ) -> None:
     """
     Inspect a course and show its structure, warnings, and migration readiness.
     """
+    setup_logging(log_level, log_file)
+
     # Validate input file exists
     if not Path(path).exists():
+        logger.error("Input file not found: %s", path)
         typer.echo(f"Error: File {path} not found", err=True)
         raise typer.Exit(1)
 
     # Auto-detect source LMS if not provided
     if not source:
         source = _detect_source(path)
+        logger.info("Auto-detected source LMS: %s", source)
 
     typer.echo(f"Inspecting {source.title()} course from {path}...")
 
+    reporter = ProcessReporter(f"Inspect {source} course")
+    logger.info("inspect: path=%s source=%s", path, source)
+
     # Run inspection
     service = IngestService()
+    result = None
+    failed = False
     try:
-        result = service.inspect(path, source_type=source, work_dir="data/extracted")
+        typer.echo(f"Inspecting {source.title()} course from {path}...")
+
+        with reporter.step("Inspect course (parse, transform, validate)"):
+            result = service.inspect(path, source_type=source, work_dir="data/extracted")
+
+        course = result["course"]
+        parsed = result.get("parsed", {})
+
+        # Print course summary
+        _print_course_summary(course, result)
+
+        # Show original structure if requested
+        if show_source or verbose:
+            _print_original_structure(parsed, source)
+
+        # Show transformed structure if verbose or validating
+        if verbose or validate_for:
+            _print_transformed_structure(course, validate_for)
+
+        # Show validation notes
+        _print_validation_notes(result, validate_for)
+
+        # Save output to file if requested
+        if output:
+            with reporter.step("Save JSON report"):
+                _save_output(result, output)
+    except typer.Exit:
+        # Helper already printed a specific message; just mark the run failed.
+        failed = True
     except Exception as e:
+        failed = True
+        logger.exception("Inspection failed")
         typer.echo(f"Error: {e}", err=True)
+    finally:
+        if report:
+            reporter.render()
+
+    if failed:
         raise typer.Exit(1)
-
-    course = result["course"]
-    parsed = result.get("parsed", {})
-
-    # Print course summary
-    _print_course_summary(course, result)
-
-    # Show original structure if requested
-    if show_source or verbose:
-        _print_original_structure(parsed, source)
-
-    # Show transformed structure if verbose or validating
-    if verbose or validate_for:
-        _print_transformed_structure(course, validate_for)
-
-    # Show validation notes
-    _print_validation_notes(result, validate_for)
-
-    # Save output to file if requested
-    if output:
-        _save_output(result, output)
 
 
 def _detect_source(path: str) -> str:

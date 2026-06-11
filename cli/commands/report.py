@@ -1,8 +1,9 @@
 import json
 import typer
 from pathlib import Path
+from datetime import datetime
 from persistence.repositories import get_job
-from domain.entities import Course
+from domain.entities import Course, ContentNode
 from domain.enums import NodeType
 
 app = typer.Typer()
@@ -42,6 +43,7 @@ def report_command(
     unsupported_types = set()
     for note in report_items:
         if note.get("code") == "UNSUPPORTED_NODES":
+            # note.message might contain the list
             unsupported_types.add(note.get("message", ""))
         elif note.get("code") == "UNSUPPORTED_QUESTION_TYPE":
             unsupported_types.add("question_type")
@@ -74,6 +76,7 @@ def report_command(
         else:
             typer.echo(output_json)
     else:  # html
+        # Generate HTML with more details
         html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -106,7 +109,7 @@ def report_command(
         <tr><td>Verticals</td><td>{verticals}</td></tr>
         <tr><td>HTML Components</td><td>{html_components}</td></tr>
         <tr><td>Problem Components</td><td>{problem_components}</td></tr>
-        <tr><td>Video Components</td><td>{video_components}</td></td>
+        <tr><td>Video Components</td><td>{video_components}</td></tr>
         <tr><td>Assessments</td><td>{len(course.assessments)}</td></tr>
         <tr><td>Questions</td><td>{len(course.questions)}</td></tr>
         <tr><td>Answer Options</td><td>{len(course.answer_options)}</td></tr>
@@ -115,7 +118,7 @@ def report_command(
 """
         if course.assets:
             html += """    <h2>Assets</h2>
-    </table>
+    <table>
         <tr><th>Asset ID</th><th>Path</th></tr>
 """
             for a in course.assets[:20]:
@@ -135,7 +138,7 @@ def report_command(
             html += "    </ul>\n"
 
         html += """    <h2>Validation Warnings & Errors</h2>
-    <table>
+    </table>
         <tr><th>Severity</th><th>Code</th><th>Message</th></tr>
 """
         for note in report_items:

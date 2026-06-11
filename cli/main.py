@@ -14,7 +14,6 @@ import typer
 
 from cli.commands import inspect_command, migrate_command, report_command
 
-
 # Create Typer application with help text
 app = typer.Typer(
     help="LMS Converter - Migrate courses between Open edX and Moodle"

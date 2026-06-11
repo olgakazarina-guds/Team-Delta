@@ -1,6 +1,9 @@
+import logging
+
 from adapters.moodle import MoodleCourseParser
 from adapters.openedx.course_parser import OpenEdxCourseParser
-from adapters.base import SourceAdapter
+
+logger = logging.getLogger(__name__)
 
 class ParseService:
     def parse(self, source_path: str, source_type: str, work_dir: str) -> dict:
@@ -11,11 +14,16 @@ class ParseService:
         work_dir is the scratch directory used for archive extraction.
         The returned dict is passed directly to TransformService.transform().
         """
+        logger.info("Parsing %s source: %s", source_type, source_path)
+        logger.debug("Extraction work_dir=%s", work_dir)
         if source_type == "openedx":
             parser = OpenEdxCourseParser()
-            return parser.parse(source_path, work_dir)
+            result = parser.parse(source_path, work_dir)
         elif source_type == "moodle":
             parser = MoodleCourseParser()
-            return parser.parse(source_path, work_dir)
+            result = parser.parse(source_path, work_dir)
         else:
+            logger.error("Unsupported source type: %s", source_type)
             raise ValueError(f"Unsupported source type: {source_type}")
+
+        logger.debug(  "Parsed %d raw fragments from %s",len(result.get("raw_fragments", [])), source_path,)
