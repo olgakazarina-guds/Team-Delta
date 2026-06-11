@@ -210,26 +210,80 @@ class OpenEdxCourseParser:
         }
 
     def _parse_vertical(self, vert_file: Path, extracted_root: Path) -> Dict[str, Any]:
-        """
-        Parse a single vertical XML file.
-
-        Returns vertical dict with title, url_name, raw_fragment_id, and components.
-        """
         tree = ET.parse(vert_file)
         root = tree.getroot()
         title = root.attrib.get("display_name", "Untitled Vertical")
 
-        # Store raw vertical XML fragment
-        fragment_id = self._store_fragment(vert_file, extracted_root)
+        with open(vert_file, "r", encoding="utf-8") as f:
+            raw_xml = f.read()
+        fragment_id = str(uuid.uuid4())
+        self.fragments.append({
+            "fragment_id": fragment_id,
+            "kind": "xml",
+            "source_location": {"source_system": "openedx", "file_path": str(vert_file)},
+            "raw_text": raw_xml,
+            "checksum": None
+        })
 
-        # Parse component children (html, video, problem, etc.)
-        components = self._parse_components(root, extracted_root)
+        components = []
+        for comp in root:
+            comp_tag = comp.tag
+            comp_url = comp.attrib.get("url_name", "")
+            comp_title = comp.attrib.get("display_name", "")
+
+            # For components that have a separate XML file, try to get the display name from that file
+            if comp_tag in ("html", "video", "problem"):
+                if comp_tag == "html":
+                    comp_file = extracted_root / "html" / f"{comp_url}.xml"
+                elif comp_tag == "video":
+                    comp_file = extracted_root / "video" / f"{comp_url}.xml"
+                elif comp_tag == "problem":
+                    comp_file = extracted_root / "problem" / f"{comp_url}.xml"
+                else:
+                    comp_file = None
+
+                if comp_file and comp_file.exists():
+                    try:
+                        wrapper_tree = ET.parse(comp_file)
+                        wrapper_root = wrapper_tree.getroot()
+                        # Override title if the wrapper has a display_name
+                        wrapper_title = wrapper_root.attrib.get("display_name", "")
+                        if wrapper_title:
+                            comp_title = wrapper_title
+                    except Exception:
+                        pass  # fallback to original title
+
+            comp_raw_fragment_id = None
+            # Store raw fragment for the component XML (if exists)
+            if comp_tag in ("html", "video", "problem"):
+                comp_file = extracted_root / comp_tag / f"{comp_url}.xml"
+                if comp_file and comp_file.exists():
+                    with open(comp_file, "r", encoding="utf-8") as f:
+                        comp_raw = f.read()
+                    cid = str(uuid.uuid4())
+                    self.fragments.append({
+                        "fragment_id": cid,
+                        "kind": "xml",
+                        "source_location": {"source_system": "openedx", "file_path": str(comp_file)},
+                        "raw_text": comp_raw,
+                        "checksum": None
+                    })
+                    comp_raw_fragment_id = cid
+
+            components.append({
+                "type": comp_tag,
+                "title": comp_title,
+                "url_name": comp_url,
+                "raw_fragment_id": comp_raw_fragment_id,
+                "inline_xml": ET.tostring(comp, encoding="unicode") if comp_tag == "openassessment" else None,
+                "content_html": None  # To be filled later if needed
+            })
 
         return {
             "title": title,
             "url_name": vert_file.stem,
             "raw_fragment_id": fragment_id,
-            "components": components,
+            "components": components
         }
 
     def _parse_components(
