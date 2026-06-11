@@ -106,7 +106,8 @@ def migrate_command(
         raise typer.Exit(1)
 
     # Print migration summary
-    _print_migration_summary(course, notes, output_path)
+    _print_migration_summary(course, notes, output_path, result)
+    typer.echo(f"Job ID: {result['job_id']}")
 
 
 def _detect_source(source_path: str) -> str:
@@ -236,7 +237,7 @@ def _perform_migration(course: Any, target: str, output: str, result: dict) -> s
         raise typer.Exit(1)
 
 
-def _print_migration_summary(course: Any, notes: List[Any], output_path: str) -> None:
+def _print_migration_summary(course: Any, notes: List[Any], output_path: str, result: dict) -> None:
     """Print migration summary with content statistics."""
     def count_node_type(nodes, target_type):
         count = 0

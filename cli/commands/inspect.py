@@ -115,7 +115,7 @@ def inspect_command(
 
     if failed:
         raise typer.Exit(1)
-
+    typer.echo(f"\nJob ID: {result['job_id']}")
 
 def _detect_source(path: str) -> str:
     """
