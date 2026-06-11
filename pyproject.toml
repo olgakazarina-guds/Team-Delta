@@ -21,7 +21,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["cli", "core", "data", "domain", "adapters", "persistence"]  
+packages = ["cli", "core", "data", "domain", "adapters", "persistence"]
 
 [project.scripts]
 lms-converter = "cli.main:app"
