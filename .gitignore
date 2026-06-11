@@ -16,3 +16,4 @@ data/*.db-journal
 *.swp
 .DS_Store
 data/
+reports/
