@@ -40,6 +40,8 @@ class IngestService:
     def inspect(self, source_path: str, source_type: str = "openedx", work_dir: str = "data/extracted") -> Dict[str, Any]:
         job_id = str(uuid.uuid4())
         parsed = self.parse_service.parse(source_path, source_type, work_dir)
+        if parsed is None:
+            raise ValueError(f"Parse service returned None for {source_type} course. Check logs.")
         course = self.transform_service.transform(parsed, source_type, job_id)
         report = self.validation_service.validate(course)
         # Save job
