@@ -19,12 +19,12 @@ Usage:
 """
 
 import logging
-import tarfile
-import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import os
+
+from core.archive_utils import safe_extract_tar, safe_extract_zip
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +50,10 @@ class MoodleBackupReader:
 
         if is_gzip:
             logger.debug("Detected Gzip, extracting: %s", mbz_path)
-            with tarfile.open(mbz_path, 'r:gz') as tar:
-                tar.extractall(target_path)
+            safe_extract_tar(mbz_path, target_path)
         else:
             logger.debug("Detected Zip, extracting: %s", mbz_path)
-            with zipfile.ZipFile(mbz_path, 'r') as zf:
-                zf.extractall(target_path)
+            safe_extract_zip(mbz_path, target_path)
 
         # Locate the directory containing moodle_backup.xml
         for root, dirs, files in os.walk(target_path):
@@ -77,12 +75,15 @@ class MoodleBackupReader:
         We try moduleid first and fall back to cmid so both variants are handled.
         """
         root = ET.parse(extracted / "moodle_backup.xml").getroot()
-        information = root.find("information") or root
+        information = root.find("information")
+        if information is None:
+            information = root
 
         course_information: Dict[str, Any] = {}
         course_element = information.find(".//contents/course")
         if course_element is not None:
             course_information["title"] = course_element.findtext("title", "")
+            course_information["course_id"] = course_element.findtext("courseid", "")
             course_information["directory"] = course_element.findtext("directory", "course")
 
         activities: Dict[str, Any] = {}
@@ -102,7 +103,8 @@ class MoodleBackupReader:
         sections: List[Dict[str, Any]] = []
         for section in information.findall(".//contents/sections/section"):
             sections.append({
-                "section_id": section.findtext("section_id", ""),
+                "section_id": section.findtext("sectionid")
+                or section.findtext("section_id", ""),
                 "title": section.findtext("title", ""),
                 "directory": section.findtext("directory", ""),
             })
@@ -134,7 +136,7 @@ class MoodleBackupReader:
         root = ET.parse(files_xml).getroot()
         records: Dict[str, Any] = {}
         for record in root.findall("file"):
-            file_id = record.findtext("id")
+            file_id = record.get("id") or record.findtext("id")
             if not file_id:
                 continue
 

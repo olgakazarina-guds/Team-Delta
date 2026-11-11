@@ -9,6 +9,7 @@ Asset file copying from Moodle backups
 XML generation for all Open edX components (html, problem, video, etc.)
 """
 
+import json
 import os
 import tarfile
 import uuid
@@ -16,6 +17,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
+from core.archive_utils import resolve_under
 from domain.entities import Course, ContentNode, Assessment, Question, AnswerOption, Asset, RawFragment, MappingNote
 from domain.enums import SourceSystem, NodeType, AssessmentType, Severity
 
@@ -39,6 +41,7 @@ class OpenEdxTargetAdapter:
         self.work_dir: Optional[Path] = None
         self.course: Optional[Course] = None
         self.node_id_map: Dict[str, str] = {}
+        self.asset_paths: Dict[str, str] = {}
 
     def generate_export(
         self, 
@@ -67,18 +70,20 @@ class OpenEdxTargetAdapter:
         """
         # Step 1: Initialize working directory and course state
         self.course = course
+        self.asset_paths = self._build_asset_paths()
         self.work_dir = Path("data/openedx_export") / uuid.uuid4().hex
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
         # Step 2: Create Open edX directory structure
-        for subdir in ["chapter", "sequential", "vertical", "html", "problem", "video", "openassessment", "discussion", "course", "asset"]:
-            (self.work_dir / subdir).mkdir(exist_ok=True)
+        for subdir in ["chapter", "sequential", "vertical", "html", "problem", "video", "openassessment", "discussion", "scormxblock", "course", "static", "policies"]:
+            (self.work_dir / subdir).mkdir(parents=True, exist_ok=True)
 
         # Step 3: Generate root course.xml (course settings)
         self._write_root_course_xml()
 
         # Step 4: Generate actual course definition (course/{url_name}.xml)
         self._write_actual_course_xml()
+        self._write_policies()
 
         # Step 5: Process content nodes and generate XML for each hierarchy level
         for node in course.content_nodes:
@@ -91,6 +96,7 @@ class OpenEdxTargetAdapter:
 
         # Step 7: Package everything into a tar.gz archive
         output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(output_path, "w:gz") as tar:
             tar.add(self.work_dir, arcname="course")
         return str(output_path)
@@ -111,6 +117,37 @@ class OpenEdxTargetAdapter:
         """
         safe = "".join(c for c in name if c.isalnum() or c in "._-")
         return safe[:max_len] if safe else "item"
+
+    def _safe_asset_filename(self, asset: Asset) -> str:
+        """Return a flat, safe static filename that keeps the file extension."""
+        raw = (
+            asset.metadata.get("original_filename")
+            or Path(asset.path).name
+            or asset.asset_id
+        )
+        safe = "".join(c for c in raw if c.isalnum() or c in "._-")
+        if not safe:
+            safe = asset.asset_id
+        suffix = Path(safe).suffix
+        if len(safe) > 120:
+            safe = safe[: 120 - len(suffix)] + suffix
+        return safe
+
+    def _build_asset_paths(self) -> Dict[str, str]:
+        """Map asset IDs to unique filenames under the export's static folder."""
+        paths: Dict[str, str] = {}
+        used: set[str] = set()
+        for asset in self.course.assets:
+            name = self._safe_asset_filename(asset)
+            if name in used:
+                name = f"{asset.asset_id[:8]}_{name}"
+            used.add(name)
+            paths[asset.asset_id] = name
+        return paths
+
+    def _asset_static_path(self, asset: Asset) -> str:
+        """Return the static URL path for an asset."""
+        return self.asset_paths.get(asset.asset_id, self._safe_asset_filename(asset))
 
     def _get_url_name(self, node_id: str) -> str:
         """
@@ -161,6 +198,57 @@ class OpenEdxTargetAdapter:
                 ch.set("url_name", self._get_url_name(node.node_id))
         
         self._write_xml(course_dir / f"{url_name}.xml", root)
+
+    def _write_policies(self) -> None:
+        """Write the minimal policy files expected in an OLX export."""
+        url_name = self._safe_name(self.course.title, 32)
+        policy = {
+            f"course/{url_name}": {
+                "display_name": self.course.title,
+                "start": "1970-01-01T00:00:00Z",
+            }
+        }
+        grading_policy = {
+            "GRADER": [],
+            "GRADE_CUTOFFS": {"Pass": 0.5},
+        }
+        policy_dir = self.work_dir / "policies"
+        course_policy_dir = policy_dir / url_name
+        course_policy_dir.mkdir(parents=True, exist_ok=True)
+        (course_policy_dir / "policy.json").write_text(
+            json.dumps(policy, indent=2), encoding="utf-8"
+        )
+        (course_policy_dir / "grading_policy.json").write_text(
+            json.dumps(grading_policy, indent=2), encoding="utf-8"
+        )
+        org = self.course.metadata.get("org", "Org")
+        course_code = self.course.metadata.get("course_code", "Course")
+        assets_policy = {}
+        for asset in self.course.assets:
+            name = self._asset_static_path(asset)
+            assets_policy[name] = {
+                "contentType": asset.mime_type or "application/octet-stream",
+                "content_son": {
+                    "category": "asset",
+                    "course": course_code,
+                    "name": name,
+                    "org": org,
+                    "revision": None,
+                    "run": url_name,
+                    "tag": "c4x",
+                },
+                "displayname": name,
+                "filename": (
+                    f"asset-v1:{org}+{course_code}+{url_name}"
+                    f"+type@asset+block@{name}"
+                ),
+                "import_path": None,
+                "locked": False,
+                "thumbnail_location": None,
+            }
+        (policy_dir / "assets.json").write_text(
+            json.dumps(assets_policy, indent=2), encoding="utf-8"
+        )
 
     def _write_chapter(self, node: ContentNode):
         """
@@ -232,8 +320,19 @@ class OpenEdxTargetAdapter:
         root.set("display_name", node.title or "Vertical")
         
         for comp in node.children:
-            if comp.node_type == NodeType.HTML:
+            if comp.node_type in (NodeType.HTML, NodeType.PAGE):
                 # HTML component
+                elem = ET.SubElement(root, "html")
+                elem.set("url_name", self._get_url_name(comp.node_id))
+                self._write_html(comp)
+
+            elif comp.node_type == NodeType.ACTIVITY:
+                # Moodle URL/activity nodes are exported as linked HTML.
+                elem = ET.SubElement(root, "html")
+                elem.set("url_name", self._get_url_name(comp.node_id))
+                self._write_html(comp)
+
+            elif comp.node_type == NodeType.LTI:
                 elem = ET.SubElement(root, "html")
                 elem.set("url_name", self._get_url_name(comp.node_id))
                 self._write_html(comp)
@@ -276,7 +375,7 @@ class OpenEdxTargetAdapter:
                 self._write_video(comp)
 
             elif comp.node_type == NodeType.SCORM:
-                elem = ET.SubElement(root, "scorm")
+                elem = ET.SubElement(root, "scormxblock")
                 elem.set("url_name", self._get_url_name(comp.node_id))
                 self._write_scorm(comp)
             
@@ -345,8 +444,8 @@ class OpenEdxTargetAdapter:
         Supports:
         multichoice: single-select (multiplechoiceresponse)
         truefalse: true/false (multiplechoiceresponse)
-        shortanswer: text input (textinput)
-        numerical: numerical input (numericalinput)
+        shortanswer: text input (stringresponse)
+        numerical: numerical input (numericalresponse)
         essay: open response (openassessment - not implemented, placeholder)
         
         Located at: work_dir/problem/{url_name}.xml
@@ -362,88 +461,110 @@ class OpenEdxTargetAdapter:
         root.set("display_name", assessment.title)
 
         for q in questions:
-            if q.question_type == "multichoice":
-                # Single-select (radio buttons)
-                multiplechoiceresponse = ET.SubElement(root, "multiplechoiceresponse")
-                
-                label = ET.SubElement(multiplechoiceresponse, "label")
-                label.text = q.prompt_text or "Question"
-                
-                choicegroup = ET.SubElement(multiplechoiceresponse, "choicegroup", type="MultipleChoice")
-                
-                q_options = [opt for opt in answer_options if opt.question_id == q.question_id]
-                for idx, opt in enumerate(q_options):
-                    choice = ET.SubElement(choicegroup, "choice")
-                    choice.text = opt.text
-                    choice.set("correct", "true" if opt.is_correct else "false")
-                    choice.set("name", f"{chr(97 + idx)}")  # a, b, c, d, ...
-                    
-            elif q.question_type == "truefalse":
-                # True/False question
-                multiplechoiceresponse = ET.SubElement(root, "multiplechoiceresponse")
+            q_options = [opt for opt in answer_options if opt.question_id == q.question_id]
+            qtype = q.question_type
 
-                label = ET.SubElement(multiplechoiceresponse, "label")
-                label.text = q.prompt_text or "Question"
-
-                choicegroup = ET.SubElement(multiplechoiceresponse, "choicegroup", type="MultipleChoice")
-                
-                # Add True and False options
-                true_choice = ET.SubElement(choicegroup, "choice")
-                true_choice.text = "True"
-                true_choice.set("correct", "true")
-                true_choice.set("name", "a")
-
-                false_choice = ET.SubElement(choicegroup, "choice")
-                false_choice.text = "False"
-                false_choice.set("correct", "false")
-                false_choice.set("name", "b")
-
-            elif q.question_type == "shortanswer":
-                # Text input question
-                textinput = ET.SubElement(root, "textinput")
-
-                label = ET.SubElement(textinput, "label")
-                label.text = q.prompt_text or "Question"
-
-                # Add correct answers as responses
+            if qtype in ("multichoice", "single-select"):
+                self._write_multiple_choice(
+                    root, q, q_options, multi_select=False
+                )
+            elif qtype in ("multiselect", "multi-select"):
+                self._write_multiple_choice(
+                    root, q, q_options, multi_select=True
+                )
+            elif qtype == "truefalse":
+                if not q_options:
+                    q_options = [
+                        AnswerOption(
+                            option_id=f"{q.question_id}-true",
+                            question_id=q.question_id,
+                            text="True",
+                            is_correct=True,
+                        ),
+                        AnswerOption(
+                            option_id=f"{q.question_id}-false",
+                            question_id=q.question_id,
+                            text="False",
+                            is_correct=False,
+                        ),
+                    ]
+                self._write_multiple_choice(
+                    root, q, q_options, multi_select=False
+                )
+            elif qtype in ("shortanswer", "text_input"):
                 correct_answers = q.metadata.get("correct_answers", [])
-                if correct_answers:
-                    response = ET.SubElement(textinput, "response")
-                    response.set("correct_answer", ", ".join(correct_answers))
-                else:
-                    # Placeholder - user must fill in correct answer
-                    response = ET.SubElement(textinput, "response")
-                    response.set("correct_answer", "")
-                    
-            elif q.question_type == "numerical":
-                # Numerical input question
-                numericalinput = ET.SubElement(root, "numericalinput")
-                
-                label = ET.SubElement(numericalinput, "label")
-                label.text = q.prompt_text or "Question"
-                
-                # Add correct answer
+                self._write_string_response(
+                    root, q.prompt_text or "Question", correct_answers
+                )
+            elif qtype == "numerical":
                 correct_answer = q.metadata.get("correct_answer")
-                if correct_answer:
-                    response = ET.SubElement(numericalinput, "response")
-                    response.set("correct_answer", str(correct_answer))
-                else:
-                    response = ET.SubElement(numericalinput, "response")
-                    response.set("correct_answer", "")
-                    
+                self._write_numerical_response(
+                    root,
+                    q.prompt_text or "Question",
+                    "" if correct_answer is None else str(correct_answer),
+                )
             else:
                 # Unsupported type (essay, description, etc.) - create placeholder
                 multiplechoiceresponse = ET.SubElement(root, "multiplechoiceresponse")
                 label = ET.SubElement(multiplechoiceresponse, "label")
                 label.text = f"{q.question_type}: {q.prompt_text or 'Question'} (not fully converted)"
-                
-                choicegroup = ET.SubElement(multiplechoiceresponse, "choicegroup", type="MultipleChoice")
+                choicegroup = ET.SubElement(
+                    multiplechoiceresponse,
+                    "choicegroup",
+                    type="MultipleChoice",
+                )
                 choice = ET.SubElement(choicegroup, "choice")
                 choice.text = "Review required"
                 choice.set("correct", "false")
                 choice.set("name", "a")
-        
+
         self._write_xml(self.work_dir / "problem" / f"{url_name}.xml", root)
+
+    def _write_multiple_choice(
+        self,
+        root: ET.Element,
+        question: Question,
+        options: List[AnswerOption],
+        multi_select: bool,
+    ) -> None:
+        """Write either a single-select or multi-select choice response."""
+        if multi_select:
+            response = ET.SubElement(root, "choiceresponse")
+            ET.SubElement(response, "label").text = question.prompt_text or "Question"
+            group = ET.SubElement(response, "checkboxgroup")
+        else:
+            response = ET.SubElement(root, "multiplechoiceresponse")
+            ET.SubElement(response, "label").text = question.prompt_text or "Question"
+            group = ET.SubElement(
+                response, "choicegroup", type="MultipleChoice"
+            )
+
+        for idx, opt in enumerate(options):
+            choice = ET.SubElement(group, "choice")
+            choice.text = opt.text
+            choice.set("correct", "true" if opt.is_correct else "false")
+            choice.set("name", chr(97 + idx))
+
+    def _write_string_response(
+        self, root: ET.Element, prompt: str, correct_answers: List[str]
+    ) -> None:
+        """Write a standard OLX text input response."""
+        response = ET.SubElement(root, "stringresponse")
+        response.set("answer", correct_answers[0] if correct_answers else "")
+        response.set("type", "ci")
+        ET.SubElement(response, "label").text = prompt
+        for answer in correct_answers[1:]:
+            ET.SubElement(response, "additional_answer").set("answer", answer)
+        ET.SubElement(response, "textline", size="20")
+
+    def _write_numerical_response(
+        self, root: ET.Element, prompt: str, correct_answer: str
+    ) -> None:
+        """Write a standard OLX numerical input response."""
+        response = ET.SubElement(root, "numericalresponse")
+        response.set("answer", correct_answer)
+        ET.SubElement(response, "label").text = prompt
+        ET.SubElement(response, "formulaequationinput")
 
     def _write_problem_from_data(self, comp: ContentNode, problem_data: dict):
         """
@@ -464,37 +585,65 @@ class OpenEdxTargetAdapter:
         root.set("display_name", problem_data.get("assessment_title", comp.title or "Problem"))
 
         for q in problem_data.get("questions", []):
-            if q["type"] in ("multi-select", "single-select", "truefalse"):
-                multiplechoiceresponse = ET.SubElement(root, "multiplechoiceresponse")
-                label = ET.SubElement(multiplechoiceresponse, "label")
-                label.text = q.get("prompt", "")
-                choicegroup = ET.SubElement(multiplechoiceresponse, "choicegroup", type="MultipleChoice")
-                for opt in q.get("answer_options", []):
-                    choice = ET.SubElement(choicegroup, "choice")
-                    choice.text = opt["text"]
-                    choice.set("correct", "true" if opt["is_correct"] else "false")
-            elif q["type"] == "text_input":
-                textinput = ET.SubElement(root, "textinput")
-                label = ET.SubElement(textinput, "label")
-                label.text = q.get("prompt", "")
-                response = ET.SubElement(textinput, "response")
-                response.set("correct_answer", ", ".join(q.get("correct_answers", [])))
-            elif q["type"] == "numerical":
-                numericalinput = ET.SubElement(root, "numericalinput")
-                label = ET.SubElement(numericalinput, "label")
-                label.text = q.get("prompt", "")
-                response = ET.SubElement(numericalinput, "response")
-                response.set("correct_answer", str(q.get("correct_answer", "")))
+            qtype = q.get("type", "unknown")
+            if qtype in ("multichoice", "single-select", "truefalse"):
+                self._write_multiple_choice_data(root, q, multi_select=False)
+            elif qtype in ("multiselect", "multi-select"):
+                self._write_multiple_choice_data(root, q, multi_select=True)
+            elif qtype in ("shortanswer", "text_input"):
+                self._write_string_response(
+                    root,
+                    q.get("prompt", "Question"),
+                    q.get("correct_answers", []),
+                )
+            elif qtype == "numerical":
+                self._write_numerical_response(
+                    root,
+                    q.get("prompt", "Question"),
+                    str(q.get("correct_answer", "")),
+                )
             else:
-                # Generic placeholder
                 multiplechoiceresponse = ET.SubElement(root, "multiplechoiceresponse")
                 label = ET.SubElement(multiplechoiceresponse, "label")
-                label.text = f"{q.get('type', 'unknown')}: {q.get('prompt', 'Question')} (not fully converted)"
-                choice = ET.SubElement(multiplechoiceresponse, "choicegroup", "choice")
+                label.text = f"{qtype}: {q.get('prompt', 'Question')} (not fully converted)"
+                choicegroup = ET.SubElement(
+                    multiplechoiceresponse,
+                    "choicegroup",
+                    type="MultipleChoice",
+                )
+                choice = ET.SubElement(choicegroup, "choice")
                 choice.text = "Review required"
                 choice.set("correct", "false")
 
         self._write_xml(self.work_dir / "problem" / f"{url_name}.xml", root)
+
+    def _write_multiple_choice_data(
+        self, root: ET.Element, question: Dict[str, Any], multi_select: bool
+    ) -> None:
+        """Write a choice response directly from a parsed problem-data dict."""
+        options = question.get("answer_options", [])
+        if question.get("type") == "truefalse" and not options:
+            options = [
+                {"text": "True", "is_correct": True},
+                {"text": "False", "is_correct": False},
+            ]
+
+        if multi_select:
+            response = ET.SubElement(root, "choiceresponse")
+            ET.SubElement(response, "label").text = question.get("prompt", "")
+            group = ET.SubElement(response, "checkboxgroup")
+        else:
+            response = ET.SubElement(root, "multiplechoiceresponse")
+            ET.SubElement(response, "label").text = question.get("prompt", "")
+            group = ET.SubElement(
+                response, "choicegroup", type="MultipleChoice"
+            )
+
+        for idx, opt in enumerate(options):
+            choice = ET.SubElement(group, "choice")
+            choice.text = opt.get("text", "")
+            choice.set("correct", "true" if opt.get("is_correct") else "false")
+            choice.set("name", chr(97 + idx))
 
     def _write_placeholder_problem(self, comp: ContentNode):
         """
@@ -561,12 +710,12 @@ class OpenEdxTargetAdapter:
                 )
             
             if asset_obj:
-                source = ET.SubElement(root, "source") 
-                source.set("src", f"asset:{asset_obj.path}")
+                source = ET.SubElement(root, "source")
+                source.set("src", f"/static/{self._asset_static_path(asset_obj)}")
                 root.set("download_video", "true")
             else:
                 source = ET.SubElement(root, "source")
-                source.set("src", "")
+                source.set("src", metadata.get("video_url", ""))
         
         else:
             source = ET.SubElement(root, "source")    
@@ -585,15 +734,21 @@ class OpenEdxTargetAdapter:
             self._write_placeholder_scorm(comp)
             return
 
+        version = scorm_settings.get("version", "")
+        if "2004" in version:
+            version = "SCORM_2004"
+        else:
+            version = "SCORM_12"
+
         # Create the SCORM XBlock XML structure
         root = ET.Element("scormxblock")
         root.set("display_name", comp.title or "SCORM Package")
-        root.set("scorm_file", scorm_asset.path)
-        root.set("scorm_version", scorm_settings.get("version", ""))
+        root.set("scorm_file", f"/static/{self._asset_static_path(scorm_asset)}")
+        root.set("version_scorm", version)
         root.set("has_score", "true")  # Assuming it's graded
-        root.set("weight", scorm_settings.get("maxgrade", "1"))
+        root.set("weight", scorm_settings.get("maxgrade") or "1")
 
-        self._write_xml(self.work_dir / "scorm" / f"{url_name}.xml", root)
+        self._write_xml(self.work_dir / "scormxblock" / f"{url_name}.xml", root)
 
     def _write_placeholder_scorm(self, comp: ContentNode):
         # Fallback for when the asset is missing
@@ -601,40 +756,33 @@ class OpenEdxTargetAdapter:
         root = ET.Element("scormxblock")
         root.set("display_name", comp.title or "Missing SCORM Package")
         root.set("scorm_file", "")
-        self._write_xml(self.work_dir / "scorm" / f"{url_name}.xml", root)       
+        self._write_xml(self.work_dir / "scormxblock" / f"{url_name}.xml", root)
 
     def _copy_assets(self, source_extracted: Path):
         """
-        Copy asset files from source extraction to Open edX asset/ folder.
+        Copy asset files from source extraction to Open edX static/ folder.
         
         Copies files referenced in course.assets from the source extraction 
-        directory to the Open edX export's asset folder for inclusion 
+        directory to the Open edX export's static folder for inclusion 
         in the final tarball.
         
         Args:
             source_extracted: Path to extracted source directory (e.g., Moodle backup)
         """
-        asset_dir = self.work_dir / "asset"
-        copied_assets = []
+        asset_dir = self.work_dir / "static"
 
         for asset in self.course.assets:
-            source = source_extracted / asset.path
-            if source.exists():
-                dest = asset_dir / source.name
-                dest.write_bytes(source.read_bytes())
-                copied_assets.append({
-                    "asset_id": asset.asset_id,
-                    "original_path": asset.path,
-                    "copied_path": str(dest),
-                    "mime_type": asset.mime_type,
-                    "is_video": asset.metadata.get("is_video", False) if hasattr(asset, "metadata") else False,
-                })
-
-        # Log copied assets for debugging
-        if copied_assets:
-            import json
-            log_path = self.work_dir / "assets_copied.json"
-            log_path.write_text(json.dumps(copied_assets, indent=2))
+            try:
+                source = resolve_under(source_extracted, asset.path)
+                dest = resolve_under(
+                    asset_dir, self._asset_static_path(asset)
+                )
+            except ValueError:
+                continue
+            if not source.is_file():
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(source.read_bytes())
 
     def _write_xml(self, path: Path, root: ET.Element):
         """

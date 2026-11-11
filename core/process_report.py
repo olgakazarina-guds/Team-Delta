@@ -1,6 +1,6 @@
 """
 ===============================================================================
-File:        logging_conf.py
+File:        process_report.py
 Institution: German University of Digital Science
 Project:     GUDS Coding Camp I Capstone Project
 Instructor:  Prof. Dr. Thomas Staubitz

@@ -109,7 +109,7 @@ class ValidationService:
                     note_id=str(uuid.uuid4()),
                     severity=Severity.INFO,
                     code="VIDEO_ASSETS_FOUND",
-                    message=f"Found {len(video_assets)} video file(s) in source. These will be copied to asset/ folder.",
+                    message=f"Found {len(video_assets)} video file(s) in source. These will be copied to the Open edX static/ folder.",
                     source_fragment_id=None,
                     fallback_used=False
                 ))
@@ -117,7 +117,7 @@ class ValidationService:
         # Check for question types that may not fully convert
         unsupported_question_types = []
         for q in course.questions:
-            if q.question_type not in ("multichoice", "truefalse", "shortanswer", "numerical", "essay", "description"):
+            if q.question_type not in ("multichoice", "multiselect", "truefalse", "shortanswer", "numerical", "essay", "description"):
                 unsupported_question_types.append(q.question_type)
             elif q.question_type in ("essay", "description"):
                 notes.append(MappingNote(

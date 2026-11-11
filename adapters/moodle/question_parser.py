@@ -6,61 +6,17 @@ answer options, converting them into a structure that TransformService can
 use to create Question and AnswerOption domain entities.
 
 Supports question types: multichoice, truefalse, shortanswer, numerical,
-essay, description
+essay, description.
 """
 
 import xml.etree.ElementTree as ET
 import uuid
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
-    """
-    Parse Moodle questions.xml and return a list of assessment dicts.
-    
-    Moodle stores question bank data in categories, but we keep each question
-    separate for easier mapping to quiz activities. Each assessment dict
-    contains exactly one question.
-    
-    Args:
-        questions_xml_path: Path to the questions.xml file from Moodle backup
-        
-    Returns:
-        List of assessment dicts with structure:
-        [
-            {
-                "assessment_id": str (generated UUID),
-                "title": str (question name or "Question {id}"),
-                "assessment_type": "quiz",
-                "questions": [
-                    {
-                        "question_id": str (generated UUID),
-                        "original_moodle_id": str,
-                        "question_type": str (multichoice/truefalse/shortanswer/etc.),
-                        "prompt_text": str,
-                        "points": float,
-                        "answer_options": [{"text": str, "is_correct": bool}, ...],
-                        "correct_answers": [str, ...]  # for shortanswer/numerical
-                    }
-                ],
-                "raw_fragment_id": None,
-                "original_question_ids": [str]  # for linking to quiz instances
-            },
-            ...
-        ]
-        
-    Example:
-        >>> assessments = parse_questions("questions.xml")
-        >>> print(assessments[0]["title"])
-        "What caused the Russian Revolution?"
-    """
-    # -------------------------------------------------------------------------
-    # Step 1: Parse XML tree
-    # -------------------------------------------------------------------------
-
-    tree = ET.parse(questions_xml_path)
-    root = tree.getroot()
+    """Parse Moodle questions.xml and return one assessment dict per question."""
+    root = ET.parse(questions_xml_path).getroot()
     assessments = []
 
     for q_elem in root.findall(".//question"):
@@ -69,43 +25,108 @@ def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
             continue
 
         qtype_elem = q_elem.find("qtype")
-        q_type = qtype_elem.text if qtype_elem is not None else "unknown"
+        q_type = (qtype_elem.text or "unknown").strip() if qtype_elem is not None else "unknown"
 
-        name_elem = q_elem.find("name")
-        name = name_elem.text if name_elem is not None else ""
-
+        name = q_elem.findtext("name", "").strip()
         questiontext_elem = q_elem.find("questiontext")
-        questiontext = ""
-        if questiontext_elem is not None:
-            questiontext = "".join(questiontext_elem.itertext()).strip()
+        questiontext = (
+            "".join(questiontext_elem.itertext()).strip()
+            if questiontext_elem is not None
+            else ""
+        )
 
         defaultmark_elem = q_elem.find("defaultmark")
-        points = float(defaultmark_elem.text) if defaultmark_elem is not None else 1.0
+        try:
+            points = float(defaultmark_elem.text) if defaultmark_elem is not None else 1.0
+        except (TypeError, ValueError):
+            points = 1.0
+
+        answer_options: List[Dict[str, Any]] = []
+        correct_answers: List[str] = []
+        metadata: Dict[str, Any] = {}
+        canonical_type = q_type
+
+        if q_type == "multichoice":
+            plugin = q_elem.find("plugin_qtype_multichoice_question")
+            single = True
+            if plugin is not None:
+                single_elem = plugin.findtext("multichoice/single", "1")
+                single = single_elem.strip() != "0"
+                for ans in plugin.findall(".//answer"):
+                    text = _answer_text(ans)
+                    fraction = _fraction(ans)
+                    if not text:
+                        continue
+                    answer_options.append({
+                        "text": text,
+                        "is_correct": fraction > 0,
+                    })
+                    if fraction > 0:
+                        correct_answers.append(text)
+            canonical_type = "multichoice" if single else "multiselect"
+
+        elif q_type == "truefalse":
+            plugin = q_elem.find("plugin_qtype_truefalse_question")
+            if plugin is not None:
+                for ans in plugin.findall(".//answer"):
+                    text = _answer_text(ans)
+                    if not text:
+                        continue
+                    is_correct = _fraction(ans) > 0
+                    answer_options.append({
+                        "text": text,
+                        "is_correct": is_correct,
+                    })
+                    if is_correct:
+                        correct_answers.append(text)
+
+        elif q_type == "shortanswer":
+            plugin = q_elem.find("plugin_qtype_shortanswer_question")
+            if plugin is not None:
+                for ans in plugin.findall(".//answer"):
+                    text = _answer_text(ans)
+                    if not text:
+                        continue
+                    fraction = _fraction(ans)
+                    answer_options.append({
+                        "text": text,
+                        "is_correct": fraction > 0,
+                    })
+                    if fraction > 0:
+                        correct_answers.append(text)
+
+        elif q_type == "numerical":
+            plugin = q_elem.find("plugin_qtype_numerical_question")
+            if plugin is not None:
+                for ans in plugin.findall(".//answer"):
+                    text = _answer_text(ans)
+                    if not text:
+                        continue
+                    fraction = _fraction(ans)
+                    answer_options.append({
+                        "text": text,
+                        "is_correct": fraction > 0,
+                    })
+                    if fraction > 0:
+                        correct_answers.append(text)
+                        metadata.setdefault("correct_answer", text)
+                    tolerance = ans.findtext("tolerance")
+                    if tolerance is not None:
+                        metadata["tolerance"] = tolerance
+
+        elif q_type in ("essay", "description"):
+            metadata["requires_manual_review"] = True
 
         question = {
             "question_id": str(uuid.uuid4()),
             "original_moodle_id": q_id,
-            "question_type": q_type,
+            "question_type": canonical_type,
             "prompt_text": questiontext,
             "points": points,
-            "answer_options": [],
-            "correct_answers": [],
+            "answer_options": answer_options,
+            "correct_answers": correct_answers,
+            "metadata": metadata,
         }
-
-        # --- Parse answers depending on type ---
-        if q_type == "multichoice":
-            plugin = q_elem.find("plugin_qtype_multichoice_question")
-            if plugin is not None:
-                for ans in plugin.findall(".//answer"):
-                    fraction_elem = ans.find("fraction")
-                    fraction = float(fraction_elem.text) if fraction_elem is not None else 0.0
-                    answertext_elem = ans.find("answertext")
-                    text = "".join(answertext_elem.itertext()).strip() if answertext_elem is not None else ""
-                    question["answer_options"].append({
-                        "text": text,
-                        "is_correct": fraction > 0,
-                    })
-        # Add other question types similarly...
 
         assessment_id = str(uuid.uuid4())
         assessments.append({
@@ -116,4 +137,21 @@ def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
             "original_question_ids": [q_id],
         })
 
-    return assessments   
+    return assessments
+
+
+def _answer_text(answer: ET.Element) -> str:
+    elem = answer.find("answertext")
+    if elem is None:
+        return ""
+    return "".join(elem.itertext()).strip()
+
+
+def _fraction(answer: ET.Element) -> float:
+    elem = answer.find("fraction")
+    if elem is None or elem.text is None:
+        return 0.0
+    try:
+        return float(elem.text)
+    except ValueError:
+        return 0.0

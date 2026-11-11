@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from .backup_reader import MoodleBackupReader
 from domain.enums import NodeType
-from domain.entities import ScormAsset
 
 class MoodleCourseParser:
     """
@@ -70,6 +69,7 @@ class MoodleCourseParser:
             "History of Russia in Revolution"
         """
         # Step 1: Extract archive and read manifest
+        self.fragments = []
         extracted = self.reader.extract_archive(mbz_path, work_dir)
         manifest = self.reader.read_manifest(extracted)
 
@@ -116,6 +116,7 @@ class MoodleCourseParser:
             "assessments": assessments,
             "assets": assets,
             "raw_fragments": self.fragments,
+            "extracted_path": str(extracted),
         }
 
     def _parse_section(
@@ -259,6 +260,7 @@ class MoodleCourseParser:
             "assign": self._parse_assign,
             "workshop": self._parse_workshop,
             "lesson": self._parse_lesson,
+            "videofile": self._parse_video,
         }
 
         # Handle missing XML or unrecognized module type
@@ -528,7 +530,8 @@ class MoodleCourseParser:
             })
             # Create download link for non-video resources
             if not is_video:
-                download_link = f'<p><a href="/static/asset/{filename}">Download {filename}</a></p>'
+                asset_path = f"files/{contenthash[:2]}/{contenthash}"
+                download_link = f'<p><a href="/static/{asset_path}">Download {filename}</a></p>'
             break
 
         if is_video:
@@ -546,7 +549,7 @@ class MoodleCourseParser:
                 content += "<p>No file available.</p>"
             return {
                 "title": title,
-                "node_type": NodeType.HTML.value,
+                "node_type": NodeType.ACTIVITY.value,
                 "content_html": content,
                 "metadata": {"activity_type": "resource", "asset_id": asset_id},
             }
@@ -587,22 +590,25 @@ class MoodleCourseParser:
             zip_path = extracted / activity_dir / "package"
         
         if zip_path.exists():
-            # Create a canonical ScormAsset object
-            scorm_asset = ScormAsset(
-                asset_id=str(uuid.uuid4()),
-                course_id=activity_info.get("course_id", ""),
-                path=str(zip_path.relative_to(extracted)),
-                mime_type="application/zip",
-                checksum="",
-                original_zip_path=str(zip_path.relative_to(extracted)),
-                version=scorm_settings.get("version", ""),
-            )
-            assets.append(scorm_asset)
+            relative_zip = str(zip_path.relative_to(extracted))
+            asset_id = str(uuid.uuid4())
+            assets.append({
+                "asset_id": asset_id,
+                "path": relative_zip,
+                "mime_type": "application/zip",
+                "checksum": "",
+                "original_zip_path": relative_zip,
+                "version": scorm_settings.get("version", ""),
+                "is_scorm": True,
+            })
 
             return {
                 "title": title,
                 "node_type": NodeType.SCORM.value,
-                "metadata": {"scorm_settings": scorm_settings, "asset_id": scorm_asset.asset_id},
+                "metadata": {
+                    "scorm_settings": scorm_settings,
+                    "asset_id": asset_id,
+                },
             }
         else:
             return {
@@ -733,15 +739,16 @@ class MoodleCourseParser:
                 continue
             if mimetype and "video" in mimetype.lower():
                 asset_id = str(uuid.uuid4())
-                filepath = record.get("filepath", "/").lstrip("/")
+                asset_path = f"files/{contenthash[:2]}/{contenthash}"
                 assets.append({
                     "asset_id": asset_id,
-                    "path": filepath + filename,
+                    "path": asset_path,
                     "mime_type": mimetype,
                     "checksum": contenthash,
                     "is_video": True,
+                    "original_filename": filename,
                 })
-                video_url = filepath + filename
+                video_url = asset_path
                 break
         
         return {

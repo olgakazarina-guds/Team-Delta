@@ -138,7 +138,7 @@ def report_command(
             html += "    </ul>\n"
 
         html += """    <h2>Validation Warnings & Errors</h2>
-    </table>
+    <table>
         <tr><th>Severity</th><th>Code</th><th>Message</th></tr>
 """
         for note in report_items:
