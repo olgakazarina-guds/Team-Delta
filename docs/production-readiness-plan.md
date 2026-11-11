@@ -7,11 +7,13 @@ Phase 0 / Workstream 1 is committed on `phase2/lms-migration`:
 - `400850c` removes generated exports and dead modules
 - `64e4127` adds the production roadmap and repository policies
 - `bcb4da4` hardens the migration pipeline, persistence, and reporting
-- 23 unit tests pass from a rebuilt `uv` environment; the worktree is clean
+- `5729227` adds central configuration, an installable wheel, and a lean CLI
+- 26 unit tests pass from a rebuilt `uv` environment; the worktree is clean
 - `data/lms_converter.db` is backed up and schema migration was verified against the existing 59-job database
 - Generated course exports are no longer tracked; `LICENSE`, `CHANGELOG.md`, `SECURITY.md`, and corrected docs are committed
+- `uv build` and a clean-venv wheel install succeed; `lms-converter --help` works outside the repository
 
-Workstream 1 is complete. There are still no integration or real-LMS tests.
+Workstreams 1 and 2 are complete. There are still no integration or real-LMS tests.
 
 ## Verdict
 
@@ -465,4 +467,4 @@ A release is production-ready only when:
 
 Recommended defaults: local-first CLI + self-hosted web, SQLite for local and Postgres for shared, Streamlit for pilot, Apache-2.0 core with a commercial enterprise layer after legal review, and certification against Moodle 4.5 LTS plus the current supported Open edX release.
 
-The immediate next action is **Workstream 2: packaging, configuration, and installability**.
+The immediate next action is **Workstream 3: security and input hardening**.
