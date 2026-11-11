@@ -13,10 +13,12 @@ import xml.etree.ElementTree as ET
 import uuid
 from typing import Any, Dict, List
 
+from core.xml_utils import parse_xml_file
+
 
 def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
     """Parse Moodle questions.xml and return one assessment dict per question."""
-    root = ET.parse(questions_xml_path).getroot()
+    root = parse_xml_file(questions_xml_path)
     assessments = []
 
     for q_elem in root.findall(".//question"):

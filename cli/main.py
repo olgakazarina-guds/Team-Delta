@@ -10,6 +10,8 @@ Usage:
     lms-converter migrate path/to/course.mbz --target openedx --output export.tar.gz
 """
 
+from importlib.metadata import PackageNotFoundError, version as package_version
+
 import typer
 
 from cli.commands import inspect_command, migrate_command, report_command
@@ -20,8 +22,27 @@ app = typer.Typer(
 )
 
 
+def _version_callback(value: bool) -> None:
+    if not value:
+        return
+    try:
+        current = package_version("lms-converter")
+    except PackageNotFoundError:
+        current = "0.1.0"
+    typer.echo(current)
+    raise typer.Exit()
+
+
 @app.callback()
-def main() -> None:
+def main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show the installed version and exit.",
+    ),
+) -> None:
     """
     LMS Converter - Migrate courses between Open edX and Moodle.
 

@@ -102,24 +102,22 @@ def test_moodle_to_openedx_target(moodle_archive: Path, tmp_path: Path):
     with tarfile.open(output, "r:gz") as archive:
         archive.extractall(extract_dir, filter="data")
 
-    assert (extract_dir / "course" / "course.xml").exists()
-    assert (extract_dir / "course" / "scormxblock").exists()
-    url_name = ET.parse(extract_dir / "course" / "course.xml").getroot().get(
-        "url_name"
-    )
-    policy_dir = extract_dir / "course" / "policies" / url_name
+    assert (extract_dir / "course.xml").exists()
+    assert (extract_dir / "scormxblock").is_dir()
+    url_name = ET.parse(extract_dir / "course.xml").getroot().get("url_name")
+    policy_dir = extract_dir / "policies" / url_name
     assert (policy_dir / "policy.json").exists()
     assert (policy_dir / "grading_policy.json").exists()
-    assert list((extract_dir / "course" / "static").rglob("*"))
+    assert list((extract_dir / "static").rglob("*"))
     assets_policy = json.loads(
-        (extract_dir / "course" / "policies" / "assets.json").read_text(encoding="utf-8")
+        (extract_dir / "policies" / "assets.json").read_text(encoding="utf-8")
     )
     assert {"doc.pdf", "clip.mp4", "package.zip"} <= set(assets_policy)
     for name, asset in assets_policy.items():
         assert asset["filename"].startswith("asset-v1:")
         assert asset["filename"].endswith(f"@{name}")
-        assert (extract_dir / "course" / "static" / name).is_file()
-    problem_files = list((extract_dir / "course" / "problem").glob("*.xml"))
+        assert (extract_dir / "static" / name).is_file()
+    problem_files = list((extract_dir / "problem").glob("*.xml"))
     assert problem_files
     problem_xml = problem_files[0].read_text(encoding="utf-8")
     assert "choiceresponse" in problem_xml or "multiplechoiceresponse" in problem_xml

@@ -1,16 +1,53 @@
 import json
-import tempfile
+import logging
+import uuid
+
 import streamlit as st
-import os
-from pathlib import Path
+
+from core.auth import require_identity
+from core.config import get_settings
+from core.errors import AuthenticationError, UnsafePathError, UploadSecurityError
 from core.ingest import IngestService
 from core.migrate import MigrationService
+from core.outputs import resolve_output_path
+from core.report import render_html_report
+from core.uploads import cleanup_expired_uploads, save_upload
 from domain.entities import Course
 from domain.enums import NodeType
 from persistence.repositories import get_job, init_db
 
+logger = logging.getLogger(__name__)
+
+settings = get_settings()
+settings.ensure_directories()
+
 # Page setup
 st.set_page_config(page_title="LMS Converter", layout="wide")
+
+context = getattr(st, "context", None)
+headers = getattr(context, "headers", {}) if context is not None else {}
+try:
+    identity = require_identity(settings, headers=headers)
+except AuthenticationError:
+    logger.warning("Authentication gate rejected the request")
+    st.error("Authentication is required.")
+    st.stop()
+
+if st.session_state.get("user_id") != identity.user_id:
+    for key in (
+        "inspection_result",
+        "inspection_path",
+        "migration_job_id",
+        "report_job",
+        "report_format",
+        "show_report_dialog",
+        "upload_session_id",
+    ):
+        st.session_state.pop(key, None)
+
+st.session_state.user_id = identity.user_id
+cleanup_expired_uploads(settings)
+
 st.title("LMS Converter")
 st.markdown("Migrate courses between Open edX and Moodle")
 
@@ -25,8 +62,8 @@ if "report_job" not in st.session_state:
     st.session_state.report_job = None
 if "report_format" not in st.session_state:
     st.session_state.report_format = None
-if "output_directory" not in st.session_state:
-    st.session_state.output_directory = str(Path.home())
+if "upload_session_id" not in st.session_state:
+    st.session_state.upload_session_id = uuid.uuid4().hex
 if "show_report_dialog" not in st.session_state:
     st.session_state.show_report_dialog = False
 
@@ -40,97 +77,9 @@ def count_node_type(nodes, target_type):
     return count
 
 def generate_html_report(job_id, job, course, report_items):
-    chapters = count_node_type(course.content_nodes, "chapter")
-    sequentials = count_node_type(course.content_nodes, "sequential")
-    verticals = count_node_type(course.content_nodes, "vertical")
-    html_components = count_node_type(course.content_nodes, "html")
-    problem_components = count_node_type(course.content_nodes, "problem")
-    video_components = count_node_type(course.content_nodes, "video")
+    """Delegate to the escaped, shared report renderer."""
+    return render_html_report(job_id, job, course, report_items)
 
-    unsupported_types = set()
-    for note in report_items:
-        if note.get("code") == "UNSUPPORTED_NODES":
-            unsupported_types.add(note.get("message", ""))
-        elif note.get("code") == "UNSUPPORTED_QUESTION_TYPE":
-            unsupported_types.add("question_type")
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>LMS Converter Report - {job_id}</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; margin: 2rem; }}
-        h1, h2 {{ color: #2c3e50; }}
-        table {{ border-collapse: collapse; width: 100%; margin: 1rem 0; }}
-        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-        th {{ background-color: #f2f2f2; }}
-        .warning {{ background-color: #fff3cd; }}
-        .error {{ background-color: #f8d7da; }}
-        .info {{ background-color: #d1ecf1; }}
-        .summary {{ background-color: #e9ecef; }}
-    </style>
-</head>
-<body>
-    <h1>LMS Converter Report</h1>
-    <p><strong>Job ID:</strong> {job_id}</p>
-    <p><strong>Created:</strong> {job['created_at']}</p>
-    <p><strong>Source LMS:</strong> {job['source_type']}</p>
-    <p><strong>Target LMS:</strong> {job['target_type'] or 'N/A'}</p>
-    <h2>Course Summary</h2>
-    <table class="summary">
-        <tr><th>Property</th><th>Value</th></tr>
-        <tr><td>Title</td><td>{course.title}</td></tr>
-        <tr><td>Content Nodes</td><td>{len(course.content_nodes)}</td></tr>
-        <tr><td>Chapters</td><td>{chapters}</td></tr>
-        <tr><td>Sequentials</td><td>{sequentials}</td></tr>
-        <tr><td>Verticals</td><td>{verticals}</td></tr>
-        <tr><td>HTML Components</td><td>{html_components}</td></tr>
-        <tr><td>Problem Components</td><td>{problem_components}</td></tr>
-        <tr><td>Video Components</td><td>{video_components}</td></tr>
-        <tr><td>Assessments</td><td>{len(course.assessments)}</td></tr>
-        <tr><td>Questions</td><td>{len(course.questions)}</td></tr>
-        <tr><td>Answer Options</td><td>{len(course.answer_options)}</td></tr>
-        <tr><td>Assets</td><td>{len(course.assets)}</td></tr>
-    </table>
-"""
-    if course.assets:
-        html += """    <h2>Assets</h2>
-    <table>
-        <tr><th>Asset ID</th><th>Path</th></tr>
-"""
-        for a in course.assets[:20]:
-            html += f"""        <tr><td>{a.asset_id}</td><td>{a.path}</td></tr>
-"""
-        if len(course.assets) > 20:
-            html += f"""        <tr><td colspan="2">... and {len(course.assets)-20} more</td></tr>
-"""
-        html += "    </table>\n"
-
-    if unsupported_types:
-        html += """    <h2>Unsupported Features</h2>
-    <ul>
-"""
-        for u in unsupported_types:
-            html += f"        <li>{u}</li>\n"
-        html += "    </ul>\n"
-
-    html += """    <h2>Validation Warnings & Errors</h2>
-    <table>
-        <tr><th>Severity</th><th>Code</th><th>Message</th></tr>
-"""
-    for note in report_items:
-        severity = note.get("severity", "info")
-        css_class = {"warning": "warning", "error": "error", "info": "info"}.get(severity, "")
-        html += f"""        <tr class="{css_class}">
-            <td>{severity}</td>
-            <td>{note.get('code', '')}</td>
-            <td>{note.get('message', '')}</td>
-        </tr>
-"""
-    html += """    </table>
-</body>
-</html>"""
-    return html
 
 # Utility: convert objects to JSON-serializable
 def make_serializable(obj):
@@ -285,7 +234,7 @@ with st.sidebar:
     if st.button("Generate Report", key="generate_report_btn"):
         if job_id_input:
             init_db()
-            job = get_job(job_id_input)
+            job = get_job(job_id_input, owner=st.session_state.user_id)
             if job:
                 st.session_state.report_job = job
                 st.session_state.report_format = report_format
@@ -313,7 +262,7 @@ def report_dialog():
             course = Course.model_validate_json(job["course_json"])
             report_items = json.loads(job["report_json"])
             html_content = generate_html_report(job_id, job, course, report_items)
-            st.components.v1.html(html_content, height=600, scrolling=True)
+            st.info("The escaped HTML report is ready to download.")
             st.download_button(
                 label="Download HTML Report",
                 data=html_content,
@@ -321,9 +270,9 @@ def report_dialog():
                 mime="text/html",
                 key="download_html_report_dialog"
             )
-        except Exception as e:
-            st.error(f"Error generating HTML report: {e}")
-            st.exception(e)
+        except Exception:
+            logger.exception("Could not generate HTML report for job %s", job_id)
+            st.error("Could not generate the HTML report. Check the server log.")
     else:  # json
         try:
             course_data = json.loads(job["course_json"])
@@ -336,8 +285,9 @@ def report_dialog():
                 mime="application/json",
                 key="download_json_report_dialog"
             )
-        except Exception as e:
-            st.error(f"Report data not available: {e}")
+        except Exception:
+            logger.exception("Could not load JSON report for job %s", job_id)
+            st.error("Report data is not available.")
     if st.button("Close Report", key="close_report_dialog"):
         st.session_state.show_report_dialog = False
         st.rerun()
@@ -366,19 +316,30 @@ else:
 
 st.caption(f"Detected source LMS: **{source_lms.upper()}**")
 
-# Save upload to temporary file
-suffix = ".tar.gz" if uploaded_file.name.endswith(".tar.gz") else f".{uploaded_file.name.split('.')[-1]}"
-with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-    tmp_file.write(uploaded_file.getvalue())
-    tmp_path = tmp_file.name
+# Stream the upload into the server-owned staging directory
+try:
+    stored_upload = save_upload(
+        uploaded_file,
+        uploaded_file.name,
+        session_id=st.session_state.upload_session_id,
+        settings=settings,
+    )
+except UploadSecurityError as exc:
+    st.error(str(exc))
+    st.stop()
+
+tmp_path = str(stored_upload.path)
+st.caption(f"Upload SHA-256: `{stored_upload.sha256}`")
 
 # Migration dialog
 def run_migration():
     target_lms = st.session_state.get("target_lms", "openedx")
     output_filename = st.session_state.get("output_filename", "export.tar.gz")
-    output_directory = st.session_state.get("output_directory", str(Path.home()))
-    detailed = st.session_state.get("detailed", False)
-    output_path = os.path.join(output_directory, output_filename)
+    try:
+        output_path = str(resolve_output_path(output_filename))
+    except UnsafePathError as exc:
+        st.error(str(exc))
+        return
     inspection = st.session_state.inspection_result
     if not inspection:
         st.error("No inspection result available. Please inspect first.")
@@ -389,10 +350,8 @@ def run_migration():
     job_id = inspection.get("job_id")
     report = inspection.get("report", [])
 
-    migrator = MigrationService()
+    migrator = MigrationService(owner=st.session_state.user_id)
     try:
-        output_dir = Path(output_path).parent
-        output_dir.mkdir(parents=True, exist_ok=True)
         if target_lms == "openedx":
             with st.spinner("Converting to Open edX format..."):
                 output_file = migrator.migrate_to_openedx(
@@ -420,7 +379,7 @@ def run_migration():
         st.session_state.migration_job_id = job_id
         st.info(f"Job ID: {job_id}")
         # Save migration report
-        reports_dir = Path("data/reports")
+        reports_dir = settings.report_dir
         reports_dir.mkdir(parents=True, exist_ok=True)
         migration_json_path = reports_dir / f"migration_{job_id}.json"
         serializable_course = make_serializable(course)
@@ -432,8 +391,9 @@ def run_migration():
                 "source_extracted_path": extracted_path
             }, f, indent=2)
         st.info(f"Migration report saved to: {migration_json_path}")
-    except Exception as e:
-        st.error(f"Migration failed: {e}")
+    except Exception:
+        logger.exception("Migration failed for job %s", job_id)
+        st.error("Migration failed. Check the server log for details.")
 
 @st.dialog("Migrate Course")
 def migrate_dialog():
@@ -442,20 +402,11 @@ def migrate_dialog():
     default_filename = "export.tar.gz" if target_lms == "openedx" else "export.mbz"
     output_filename = st.text_input("Output filename", value=default_filename, key="dialog_output_filename",
                                     help="Name of the output file (e.g., export.tar.gz)")
-    st.markdown("### Output Directory")
-    current_dir = st.session_state.get("output_directory", str(Path.home()))
-    output_directory = st.text_input("Directory path", value=current_dir, key="dialog_output_directory",
-                                     help="Full directory path where the file will be saved")
-    if output_directory:
-        if Path(output_directory).is_dir():
-            st.success(f"✓ Directory exists: {output_directory}")
-        else:
-            st.warning(f"⚠ Directory does not exist. It will be created automatically.")
+    st.caption(f"Files are written to: {settings.output_dir}")
     detailed = st.checkbox("Show detailed progress", value=False, key="dialog_detailed")
     if st.button("Start Migration", key="start_migration_btn"):
         st.session_state.target_lms = target_lms
         st.session_state.output_filename = output_filename
-        st.session_state.output_directory = output_directory
         st.session_state.detailed = detailed
         st.rerun()
 
@@ -465,14 +416,14 @@ with col_inspect:
     if st.button("Inspect Course", type="primary", key="inspect_btn"):
         with st.spinner("Inspecting course..."):
             try:
-                service = IngestService()
-                result = service.inspect(tmp_path, source_type=source_lms, work_dir="data/extracted")
+                service = IngestService(owner=st.session_state.user_id)
+                result = service.inspect(tmp_path, source_type=source_lms)
                 st.session_state.inspection_result = result
                 st.session_state.inspection_path = tmp_path
                 st.success("Inspection complete!")
-            except Exception as e:
-                st.error(f"Inspection failed: {e}")
-                st.exception(e)
+            except Exception:
+                logger.exception("Inspection failed")
+                st.error("Inspection failed. Check the server log for details.")
 
 with col_migrate:
     if st.session_state.inspection_result is not None:
@@ -484,7 +435,7 @@ with col_migrate:
 # Run migration after dialog closes
 if st.session_state.get("target_lms") is not None:
     run_migration()
-    for key in ("target_lms", "output_filename", "output_directory", "detailed"):
+    for key in ("target_lms", "output_filename", "detailed"):
         st.session_state.pop(key, None)
 
 # Render inspection result if available

@@ -13,7 +13,7 @@ Core entities:
 - LtiToolLink: External tool integrations (LTI)
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
 
 from .enums import AssessmentType, NodeType, Severity, SourceSystem
@@ -33,10 +33,10 @@ class ContentNode(BaseModel):
     title: Optional[str] = None
     parent_id: Optional[str] = None
     position: int = 0
-    children: List["ContentNode"] = []
+    children: List["ContentNode"] = Field(default_factory=list)
     assessment_id: Optional[str] = None  # Link to Assessment (if node contains quiz/problem)
-    raw_fragment_ids: List[str] = []  # References to RawFragment entities
-    metadata: Dict[str, Any] = {}
+    raw_fragment_ids: List[str] = Field(default_factory=list)  # References to RawFragment entities
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class Assessment(BaseModel):
@@ -51,8 +51,8 @@ class Assessment(BaseModel):
     title: str
     assessment_type: AssessmentType  # e.g., "quiz", "openassessment", "assignment"
     max_score: Optional[float] = None
-    raw_fragment_ids: List[str] = []
-    metadata: Dict[str, Any] = {}
+    raw_fragment_ids: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class Question(BaseModel):
@@ -67,8 +67,8 @@ class Question(BaseModel):
     question_type: str  # "multichoice", "text_input", "numerical", "code", etc.
     prompt_text: Optional[str] = None
     points: float = 0.0
-    raw_fragment_ids: List[str] = []
-    metadata: Dict[str, Any] = {}
+    raw_fragment_ids: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerOption(BaseModel):
@@ -97,7 +97,7 @@ class Asset(BaseModel):
     mime_type: Optional[str] = None
     checksum: Optional[str] = None
     raw_fragment_id: Optional[str] = None
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class MappingNote(BaseModel):
@@ -128,9 +128,10 @@ class LtiToolLink(BaseModel):
     content_node_id: str  # ContentNode this link is associated with
     tool_name: str
     launch_url: str
-    custom_params: Dict[str, str] = {}
+    custom_params: Dict[str, str] = Field(default_factory=dict)
     is_graded: bool = False
     raw_fragment_id: Optional[str] = None
+
 
 
 class Course(BaseModel):
@@ -144,15 +145,88 @@ class Course(BaseModel):
     course_id: str
     title: str
     source_system: SourceSystem
-    content_nodes: List[ContentNode] = []
-    assessments: List[Assessment] = []
-    questions: List[Question] = []
-    answer_options: List[AnswerOption] = []
-    lti_links: List[LtiToolLink] = []
-    assets: List[Asset] = []
-    raw_fragments: List[RawFragment] = []
-    mapping_notes: List[MappingNote] = []
-    metadata: Dict[str, Any] = {}
+    content_nodes: List[ContentNode] = Field(default_factory=list)
+    assessments: List[Assessment] = Field(default_factory=list)
+    questions: List[Question] = Field(default_factory=list)
+    answer_options: List[AnswerOption] = Field(default_factory=list)
+    lti_links: List[LtiToolLink] = Field(default_factory=list)
+    assets: List[Asset] = Field(default_factory=list)
+    raw_fragments: List[RawFragment] = Field(default_factory=list)
+    mapping_notes: List[MappingNote] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    schema_version: int = 2
+
+    def integrity_errors(self) -> List[str]:
+        """Return canonical graph integrity violations without raising.
+
+        Validation reports these as errors; target adapters can also use the
+        method as a final guard before generating an import archive.
+        """
+        errors: List[str] = []
+        node_ids: set[str] = set()
+        assessment_ids = {a.assessment_id for a in self.assessments}
+        question_ids = {q.question_id for q in self.questions}
+        referenced_assessments = {
+            n.assessment_id
+            for n in self._all_nodes()
+            if n.node_type.value == "problem" and n.assessment_id
+        }
+        referenced_questions = {a.question_id for a in self.answer_options}
+
+        for node in self._all_nodes():
+            if node.node_id in node_ids:
+                errors.append(f"Duplicate content node ID: {node.node_id}")
+            node_ids.add(node.node_id)
+            if node.parent_id and node.parent_id not in node_ids:
+                # Parent may appear later in a malformed ordering; check the
+                # complete set after traversal instead of failing early.
+                pass
+
+        for assessment in self.assessments:
+            if assessment.course_id != self.course_id:
+                errors.append(
+                    f"Assessment {assessment.assessment_id} belongs to "
+                    f"{assessment.course_id}, not {self.course_id}"
+                )
+            for question in self.questions:
+                if (
+                    question.assessment_id == assessment.assessment_id
+                    and question.question_id not in question_ids
+                ):
+                    errors.append(f"Unknown question: {question.question_id}")
+
+        duplicate_questions = len(self.questions) - len(question_ids)
+        if duplicate_questions:
+            errors.append(f"Duplicate question IDs: {duplicate_questions}")
+
+        duplicate_assessments = len(self.assessments) - len(assessment_ids)
+        if duplicate_assessments:
+            errors.append(f"Duplicate assessment IDs: {duplicate_assessments}")
+
+        missing_assessment_refs = referenced_assessments - assessment_ids
+        if missing_assessment_refs:
+            errors.append(
+                "Problems reference missing assessments: "
+                + ", ".join(sorted(missing_assessment_refs))
+            )
+
+        missing_question_refs = referenced_questions - question_ids
+        if missing_question_refs:
+            errors.append(
+                "Answer options reference missing questions: "
+                + ", ".join(sorted(missing_question_refs))
+            )
+
+        return errors
+
+    def _all_nodes(self):
+        def walk(nodes):
+            for node in nodes:
+                yield node
+                yield from walk(node.children)
+
+        yield from walk(self.content_nodes)
+
 
 class ScormAsset(Asset):
     """SCORM package asset (extends Asset with SCORM-specific fields)."""

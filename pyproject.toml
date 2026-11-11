@@ -1,31 +1,64 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "lms-converter"
 version = "0.1.0"
-description = "Add your description here"
+description = "Vendor-neutral course migration between Moodle and Open edX with verifiable fidelity."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
+authors = [{ name = "Team Delta" }]
+keywords = [
+    "lms",
+    "moodle",
+    "openedx",
+    "course-migration",
+    "education",
+    "scorm",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Education",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Education",
+]
 dependencies = [
-    "alembic>=1.18.4",
+    "defusedxml>=0.7.1",
     "pydantic>=2.13.4",
     "rich>=15.0.0",
-    "sqlalchemy>=2.0.49",
-    "streamlit>=1.57.0",
     "typer>=0.25.1",
 ]
 
+[project.optional-dependencies]
+ui = ["streamlit>=1.57.0"]
+
+[project.urls]
+Homepage = "https://github.com/olgakazarina-guds/Team-Delta"
+Repository = "https://github.com/olgakazarina-guds/Team-Delta"
+Issues = "https://github.com/olgakazarina-guds/Team-Delta/issues"
+Changelog = "https://github.com/olgakazarina-guds/Team-Delta/blob/phase2/lms-migration/CHANGELOG.md"
+
+[project.scripts]
+lms-converter = "cli.main:app"
+
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "pytest>=9.0.3",
-    "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.1.0",
 ]
 
-[tool.setuptools]
-packages = ["cli", "core", "data", "domain", "adapters", "persistence"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["adapters*", "cli*", "core*", "domain*", "persistence*"]
+exclude = ["data*", "docs*", "tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-
-[project.scripts]
-lms-converter = "cli.main:app"

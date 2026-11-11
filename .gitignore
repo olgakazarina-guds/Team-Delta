@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .venv/
 .env
+.env.*
+!.env.example
 *.egg-info/
 dist/
 build/
@@ -17,3 +19,24 @@ data/*.db-journal
 .DS_Store
 data/
 reports/
+
+# Test, coverage, and tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Logs and local secrets
+*.log
+.streamlit/secrets.toml
+
+# Course archives (keep intentional test fixtures trackable)
+*.mbz
+*.tar.gz
+*.tgz
+!tests/fixtures/**/*.mbz
+!tests/fixtures/**/*.tar.gz
+!tests/fixtures/**/*.tgz

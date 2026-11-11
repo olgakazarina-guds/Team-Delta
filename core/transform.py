@@ -12,7 +12,6 @@ Transforms parsed Open edX or Moodle data into canonical domain entities:
 """
 
 import logging
-import uuid
 from typing import Any, Dict, List
 
 from adapters.openedx.problem_parser import parse_problem
@@ -27,6 +26,7 @@ from domain.entities import (
     ScormAsset,
 )
 from domain.enums import AssessmentType, NodeType, SourceSystem
+from core.identity import stable_id
 
 logger = logging.getLogger(__name__)
 
@@ -70,13 +70,21 @@ class TransformService:
         return raw_fragments
 
     def _transform_openedx(self, parsed: dict, job_id: str) -> Course:
+        source_key = parsed.get("course_key") or ":".join(
+            [
+                str(parsed.get("org") or "org"),
+                str(parsed.get("course_code") or "course"),
+                str(parsed.get("course_url_name") or "course"),
+            ]
+        )
+        course_id = stable_id("course", "openedx", source_key)
         raw_fragments = self._build_raw_fragments(parsed)
         assessments: List[Assessment] = []
         questions: List[Question] = []
         answer_options: List[AnswerOption] = []
         content_nodes: List[ContentNode] = []
         assets = [
-            self._asset_from_dict(asset_data, job_id)
+            self._asset_from_dict(asset_data, course_id)
             for asset_data in parsed.get("assets", [])
         ]
         assets_by_path = {asset.path: asset for asset in assets}
@@ -93,20 +101,23 @@ class TransformService:
         }
 
         for chapter_idx, chapter in enumerate(parsed.get("chapters", [])):
+            chapter_ref = chapter.get("url_name") or str(chapter_idx)
             chapter_node = ContentNode(
-                node_id=str(uuid.uuid4()),
+                node_id=stable_id("node", course_id, "chapter", chapter_ref),
                 node_type=NodeType.CHAPTER,
                 title=chapter.get("title"),
                 position=chapter_idx,
                 raw_fragment_ids=[chapter["raw_fragment_id"]]
                 if chapter.get("raw_fragment_id")
                 else [],
+                metadata={"source_url_name": chapter.get("url_name")},
             )
             content_nodes.append(chapter_node)
 
             for seq_idx, seq in enumerate(chapter.get("sequentials", [])):
+                seq_ref = seq.get("url_name") or f"{chapter_ref}:{seq_idx}"
                 seq_node = ContentNode(
-                    node_id=str(uuid.uuid4()),
+                    node_id=stable_id("node", course_id, "sequential", seq_ref),
                     node_type=NodeType.SEQUENTIAL,
                     title=seq.get("title"),
                     parent_id=chapter_node.node_id,
@@ -114,12 +125,14 @@ class TransformService:
                     raw_fragment_ids=[seq["raw_fragment_id"]]
                     if seq.get("raw_fragment_id")
                     else [],
+                    metadata={"source_url_name": seq.get("url_name")},
                 )
                 chapter_node.children.append(seq_node)
 
                 for vert_idx, vert in enumerate(seq.get("verticals", [])):
+                    vert_ref = vert.get("url_name") or f"{seq_ref}:{vert_idx}"
                     vert_node = ContentNode(
-                        node_id=str(uuid.uuid4()),
+                        node_id=stable_id("node", course_id, "vertical", vert_ref),
                         node_type=NodeType.VERTICAL,
                         title=vert.get("title"),
                         parent_id=seq_node.node_id,
@@ -127,6 +140,7 @@ class TransformService:
                         raw_fragment_ids=[vert["raw_fragment_id"]]
                         if vert.get("raw_fragment_id")
                         else [],
+                        metadata={"source_url_name": vert.get("url_name")},
                     )
                     seq_node.children.append(vert_node)
 
@@ -141,8 +155,9 @@ class TransformService:
                         if asset_path and asset_path in assets_by_path:
                             metadata["asset_id"] = assets_by_path[asset_path].asset_id
 
+                        comp_ref = comp.get("url_name") or f"{vert_ref}:{comp_idx}"
                         comp_node = ContentNode(
-                            node_id=str(uuid.uuid4()),
+                            node_id=stable_id("node", course_id, "component", comp_ref),
                             node_type=node_type,
                             title=comp.get("title", ""),
                             parent_id=vert_node.node_id,
@@ -168,14 +183,14 @@ class TransformService:
                                     raw_frag.raw_text,
                                     comp,
                                     comp_node,
-                                    job_id,
+                                    course_id,
                                     assessments,
                                     questions,
                                     answer_options,
                                 )
 
         return Course(
-            course_id=job_id,
+            course_id=course_id,
             title=parsed.get("course_title", "Unnamed Course"),
             source_system=SourceSystem.OPENEDX,
             content_nodes=content_nodes,
@@ -187,7 +202,10 @@ class TransformService:
             metadata={
                 "org": parsed.get("org"),
                 "course_code": parsed.get("course_code"),
+                "source_key": source_key,
+                "job_id": job_id,
                 "extracted_path": parsed.get("extracted_path"),
+                "schema_version": 2,
             },
         )
 
@@ -196,20 +214,23 @@ class TransformService:
         raw_problem_xml: str,
         comp: Dict[str, Any],
         comp_node: ContentNode,
-        job_id: str,
+        course_id: str,
         assessments: List[Assessment],
         questions: List[Question],
         answer_options: List[AnswerOption],
     ) -> None:
         problem_data = parse_problem(raw_problem_xml, comp.get("url_name", ""))
-        assessment_id = str(uuid.uuid4())
+        problem_ref = comp.get("url_name") or comp_node.node_id
+        assessment_id = stable_id("assessment", course_id, "problem", problem_ref)
         assessment = Assessment(
             assessment_id=assessment_id,
-            course_id=job_id,
+            course_id=course_id,
             title=problem_data["assessment_title"],
             assessment_type=AssessmentType.QUIZ,
             max_score=sum(q.get("points", 0) for q in problem_data["questions"]),
-            raw_fragment_ids=[comp["raw_fragment_id"]],
+            raw_fragment_ids=[comp["raw_fragment_id"]]
+            if comp.get("raw_fragment_id")
+            else [],
             metadata={
                 "problem_url_name": comp.get("url_name"),
                 "original_type": "problem",
@@ -218,36 +239,50 @@ class TransformService:
         assessments.append(assessment)
         comp_node.assessment_id = assessment_id
 
-        for q_data in problem_data["questions"]:
+        for q_index, q_data in enumerate(problem_data["questions"]):
             question_type = self._normalise_question_type(q_data.get("type", "unknown"))
-            q_metadata: Dict[str, Any] = {}
+            question_id = stable_id(
+                "question", assessment_id, q_index, question_type
+            )
+            q_metadata: Dict[str, Any] = {
+                "source_question_id": q_data.get("question_id"),
+            }
             if q_data.get("correct_answers"):
                 q_metadata["correct_answers"] = q_data["correct_answers"]
             if q_data.get("correct_answer") is not None:
                 q_metadata["correct_answer"] = q_data["correct_answer"]
 
             question = Question(
-                question_id=q_data["question_id"],
+                question_id=question_id,
                 assessment_id=assessment_id,
                 question_type=question_type,
                 prompt_text=q_data.get("prompt", ""),
                 points=q_data.get("points", 1.0),
-                raw_fragment_ids=[comp["raw_fragment_id"]],
+                raw_fragment_ids=[comp["raw_fragment_id"]]
+                if comp.get("raw_fragment_id")
+                else [],
                 metadata=q_metadata,
             )
             questions.append(question)
 
-            for opt in q_data.get("answer_options", []):
+            for opt_index, opt in enumerate(q_data.get("answer_options", [])):
                 answer_options.append(
                     AnswerOption(
-                        option_id=str(uuid.uuid4()),
-                        question_id=question.question_id,
+                        option_id=stable_id("option", question_id, opt_index),
+                        question_id=question_id,
                         text=opt["text"],
                         is_correct=opt["is_correct"],
                     )
                 )
 
     def _transform_moodle(self, parsed: Dict[str, Any], job_id: str) -> Course:
+        source_key = (
+            parsed.get("course_id")
+            or parsed.get("course_shortname")
+            or parsed.get("course_title")
+            or "moodle-course"
+        )
+        course_id = stable_id("course", "moodle", source_key)
         raw_fragments = self._build_raw_fragments(parsed)
         content_nodes: List[ContentNode] = []
         assessments: List[Assessment] = []
@@ -259,20 +294,20 @@ class TransformService:
         quiz_activities = self._find_quiz_activities(parsed)
         self._create_quiz_assessments(
             parsed,
-            job_id,
+            course_id,
             quiz_activities,
             question_bank,
             assessments,
             questions,
             answer_options,
         )
-        self._build_moodle_content_tree(parsed, content_nodes)
+        self._build_moodle_content_tree(parsed, content_nodes, course_id)
 
         for asset_data in parsed.get("assets", []):
-            assets.append(self._asset_from_dict(asset_data, parsed.get("course_id") or job_id))
+            assets.append(self._asset_from_dict(asset_data, course_id))
 
         return Course(
-            course_id=parsed.get("course_id") or job_id,
+            course_id=course_id,
             title=parsed.get("course_title", "Unnamed Course"),
             source_system=SourceSystem.MOODLE,
             content_nodes=content_nodes,
@@ -284,6 +319,10 @@ class TransformService:
             metadata={
                 "shortname": parsed.get("course_shortname"),
                 "lang": parsed.get("lang"),
+                "source_key": source_key,
+                "job_id": job_id,
+                "extracted_path": parsed.get("extracted_path"),
+                "schema_version": 2,
             },
         )
 
@@ -297,6 +336,7 @@ class TransformService:
                     continue
                 question_bank[orig_id] = {
                     "question_id": q["question_id"],
+                    "original_moodle_id": orig_id,
                     "question_type": q["question_type"],
                     "prompt_text": q.get("prompt_text", ""),
                     "points": q.get("points", 1.0),
@@ -318,7 +358,7 @@ class TransformService:
     def _create_quiz_assessments(
         self,
         parsed: Dict[str, Any],
-        job_id: str,
+        course_id: str,
         quiz_activities: List[Dict[str, Any]],
         question_bank: Dict[str, Dict[str, Any]],
         assessments: List[Assessment],
@@ -334,10 +374,13 @@ class TransformService:
             if not questions_for_quiz:
                 continue
 
-            assessment_id = str(uuid.uuid4())
+            activity_ref = act.get("cmid") or f"{act.get('title', 'quiz')}:{len(assessments)}"
+            assessment_id = stable_id(
+                "assessment", course_id, "moodle-quiz", activity_ref
+            )
             assessment = Assessment(
                 assessment_id=assessment_id,
-                course_id=parsed.get("course_id") or job_id,
+                course_id=course_id,
                 title=act.get("title", "Quiz"),
                 assessment_type=AssessmentType.QUIZ,
                 max_score=sum(q.get("points", 0) for q in questions_for_quiz),
@@ -346,15 +389,24 @@ class TransformService:
             )
             assessments.append(assessment)
 
-            for q_data in questions_for_quiz:
+            for q_index, q_data in enumerate(questions_for_quiz):
+                source_question_id = (
+                    q_data.get("original_moodle_id")
+                    or q_data.get("question_id")
+                    or str(q_index)
+                )
+                question_id = stable_id(
+                    "question", assessment_id, source_question_id
+                )
                 metadata = dict(q_data.get("metadata") or {})
+                metadata["source_question_id"] = source_question_id
                 if q_data.get("correct_answers"):
                     metadata["correct_answers"] = q_data["correct_answers"]
                 if metadata.get("correct_answer") is None and q_data.get("correct_answers"):
                     metadata["correct_answer"] = q_data["correct_answers"][0]
 
                 question = Question(
-                    question_id=q_data["question_id"],
+                    question_id=question_id,
                     assessment_id=assessment_id,
                     question_type=self._normalise_question_type(
                         q_data["question_type"]
@@ -366,11 +418,11 @@ class TransformService:
                 )
                 questions.append(question)
 
-                for opt in q_data.get("answer_options", []):
+                for opt_index, opt in enumerate(q_data.get("answer_options", [])):
                     answer_options.append(
                         AnswerOption(
-                            option_id=str(uuid.uuid4()),
-                            question_id=question.question_id,
+                            option_id=stable_id("option", question_id, opt_index),
+                            question_id=question_id,
                             text=opt["text"],
                             is_correct=opt["is_correct"],
                         )
@@ -379,12 +431,16 @@ class TransformService:
             act["assessment_id"] = assessment_id
 
     def _build_moodle_content_tree(
-        self, parsed: Dict[str, Any], content_nodes: List[ContentNode]
+        self,
+        parsed: Dict[str, Any],
+        content_nodes: List[ContentNode],
+        course_id: str,
     ) -> None:
         """Build the Moodle Section -> Activity -> Component hierarchy."""
         for section_idx, section in enumerate(parsed.get("sections", [])):
+            section_ref = section.get("section_id") or str(section_idx)
             chapter_node = ContentNode(
-                node_id=str(uuid.uuid4()),
+                node_id=stable_id("node", course_id, "section", section_ref),
                 node_type=NodeType.CHAPTER,
                 title=section.get("title", f"Section {section_idx + 1}"),
                 position=section_idx,
@@ -396,7 +452,7 @@ class TransformService:
             content_nodes.append(chapter_node)
 
             seq_node = ContentNode(
-                node_id=str(uuid.uuid4()),
+                node_id=stable_id("node", course_id, "section-content", section_ref),
                 node_type=NodeType.SEQUENTIAL,
                 title="Content",
                 parent_id=chapter_node.node_id,
@@ -405,8 +461,9 @@ class TransformService:
             chapter_node.children.append(seq_node)
 
             for act_idx, act in enumerate(section.get("activities", [])):
+                activity_ref = act.get("cmid") or f"{section_ref}:{act_idx}"
                 vert_node = ContentNode(
-                    node_id=str(uuid.uuid4()),
+                    node_id=stable_id("node", course_id, "activity", activity_ref),
                     node_type=NodeType.VERTICAL,
                     title=act.get("title", f"Activity {act_idx + 1}"),
                     parent_id=seq_node.node_id,
@@ -420,75 +477,89 @@ class TransformService:
                     },
                 )
                 seq_node.children.append(vert_node)
-                vert_node.children.append(self._moodle_component(act, vert_node))
+                vert_node.children.append(
+                    self._moodle_component(
+                        act, vert_node, course_id, activity_ref, act_idx
+                    )
+                )
 
-    def _moodle_component(self, act: Dict[str, Any], parent: ContentNode) -> ContentNode:
+    def _moodle_component(
+        self,
+        act: Dict[str, Any],
+        parent: ContentNode,
+        course_id: str,
+        activity_ref: str,
+        position: int,
+    ) -> ContentNode:
         module = act.get("module_name", "")
         node_type_str = act.get("node_type", "")
         content_html = act.get("content_html", "")
         metadata = dict(act.get("metadata") or {})
+        metadata.setdefault("content_html", content_html)
         assessment_id = act.get("assessment_id")
+        node_id = stable_id("node", course_id, "component", activity_ref)
 
         if module in ("page", "label") or node_type_str in ("page", "html"):
+            if module == "page":
+                metadata.setdefault("moodle_module", "page")
             return ContentNode(
-                node_id=str(uuid.uuid4()),
+                node_id=node_id,
                 node_type=NodeType.HTML,
                 title=act.get("title"),
                 parent_id=parent.node_id,
-                position=0,
-                metadata={"content_html": content_html},
+                position=position,
+                metadata=metadata,
             )
 
         if module == "quiz" or node_type_str == "quiz":
             return ContentNode(
-                node_id=str(uuid.uuid4()),
+                node_id=node_id,
                 node_type=NodeType.PROBLEM,
                 title=act.get("title"),
                 parent_id=parent.node_id,
-                position=0,
+                position=position,
                 assessment_id=assessment_id,
-                metadata={"content_html": content_html},
+                metadata=metadata,
             )
 
         if module == "forum" or node_type_str == "forum":
             return ContentNode(
-                node_id=str(uuid.uuid4()),
+                node_id=node_id,
                 node_type=NodeType.FORUM,
                 title=act.get("title"),
                 parent_id=parent.node_id,
-                position=0,
-                metadata={"content_html": content_html},
+                position=position,
+                metadata=metadata,
             )
 
         if module == "workshop" or node_type_str == "openassessment":
             metadata.setdefault("activity_type", "workshop")
-            metadata["content_html"] = content_html
             return ContentNode(
-                node_id=str(uuid.uuid4()),
+                node_id=node_id,
                 node_type=NodeType.OPENASSESSMENT,
                 title=act.get("title"),
                 parent_id=parent.node_id,
-                position=0,
+                position=position,
                 metadata=metadata,
             )
 
         if node_type_str == "video":
             return ContentNode(
-                node_id=str(uuid.uuid4()),
+                node_id=node_id,
                 node_type=NodeType.VIDEO,
                 title=act.get("title"),
                 parent_id=parent.node_id,
-                position=0,
+                position=position,
                 metadata=metadata,
             )
 
         if node_type_str == "scorm" or module == "scorm":
             return ContentNode(
-                node_id=str(uuid.uuid4()),
+                node_id=node_id,
                 node_type=NodeType.SCORM,
                 title=act.get("title"),
                 parent_id=parent.node_id,
-                position=0,
+                position=position,
                 metadata=metadata,
             )
 
@@ -498,20 +569,21 @@ class TransformService:
             if metadata.get("asset_id") or module in ("resource", "url"):
                 metadata["content_html"] = content_html or link
                 return ContentNode(
-                    node_id=str(uuid.uuid4()),
+                    node_id=node_id,
                     node_type=NodeType.ACTIVITY,
                     title=act.get("title"),
                     parent_id=parent.node_id,
-                    position=0,
+                    position=position,
                     metadata=metadata,
                 )
             return ContentNode(
-                node_id=str(uuid.uuid4()),
+                node_id=node_id,
                 node_type=NodeType.HTML,
                 title=act.get("title"),
                 parent_id=parent.node_id,
-                position=0,
+                position=position,
                 metadata={
+                    **metadata,
                     "content_html": content_html or link,
                     "externalurl": url,
                 },
@@ -519,21 +591,24 @@ class TransformService:
 
         if node_type_str == "lti" or module == "lti":
             return ContentNode(
-                node_id=str(uuid.uuid4()),
+                node_id=node_id,
                 node_type=NodeType.LTI,
                 title=act.get("title"),
                 parent_id=parent.node_id,
-                position=0,
+                position=position,
                 metadata=metadata,
             )
 
         return ContentNode(
-            node_id=str(uuid.uuid4()),
+            node_id=node_id,
             node_type=NodeType.HTML,
             title=act.get("title", "Unknown"),
             parent_id=parent.node_id,
-            position=0,
-            metadata={"content_html": f"<p>Unsupported activity: {module}</p>"},
+            position=position,
+            metadata={
+                **metadata,
+                "content_html": f"<p>Unsupported activity: {module}</p>",
+            },
         )
 
     def _asset_from_dict(self, asset_data: Dict[str, Any], course_id: str) -> Asset:

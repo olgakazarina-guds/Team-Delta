@@ -14,6 +14,8 @@ import xml.etree.ElementTree as ET
 import uuid
 from typing import Dict, Any, List, Optional
 
+from core.xml_utils import parse_xml_text
+
 
 def parse_problem(problem_xml: str, problem_url_name: str) -> Dict[str, Any]:
     """
@@ -40,7 +42,7 @@ def parse_problem(problem_xml: str, problem_url_name: str) -> Dict[str, Any]:
             ]
         }
     """
-    root = ET.fromstring(problem_xml)
+    root = parse_xml_text(problem_xml, source=f"problem:{problem_url_name}")
     display_name = root.attrib.get("display_name", f"Problem: {problem_url_name}")
     questions: List[Dict[str, Any]] = []
 

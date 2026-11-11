@@ -24,7 +24,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import os
 
-from core.archive_utils import safe_extract_tar, safe_extract_zip
+from core.archive_utils import resolve_under, safe_extract_tar, safe_extract_zip
+from core.errors import SecurityError
+from core.xml_utils import parse_xml_file
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +76,7 @@ class MoodleBackupReader:
         Note: <moduleid> and <cmid> are both used across Moodle versions for the same thing.
         We try moduleid first and fall back to cmid so both variants are handled.
         """
-        root = ET.parse(extracted / "moodle_backup.xml").getroot()
+        root = parse_xml_file(extracted / "moodle_backup.xml")
         information = root.find("information")
         if information is None:
             information = root
@@ -133,7 +135,7 @@ class MoodleBackupReader:
         if not files_xml.exists():
             return {}
 
-        root = ET.parse(files_xml).getroot()
+        root = parse_xml_file(files_xml)
         records: Dict[str, Any] = {}
         for record in root.findall("file"):
             file_id = record.get("id") or record.findtext("id")
@@ -153,15 +155,17 @@ class MoodleBackupReader:
         Parse an XML file within the extracted archive and return its root Element.
 
         Returns None rather than raising if the file does not exist or is malformed.
-        This allows callers to handle missing activities gracefully without try/except
-        boilerplate at every call site.
+        Path traversal and unsafe XML are security errors and always propagate.
         """
-        xml_path = extracted / relative_path
-        if not xml_path.exists():
+        xml_path = resolve_under(extracted, relative_path)
+        if not xml_path.is_file():
             return None
         try:
-            return ET.parse(xml_path).getroot()
-        except ET.ParseError:
+            return parse_xml_file(xml_path)
+        except SecurityError:
+            raise
+        except (ET.ParseError, OSError, UnicodeError):
+            logger.warning("Malformed XML skipped: %s", xml_path)
             return None
 
     def read_raw_text(self, extracted: Path, relative_path: str) -> Optional[str]:
@@ -172,8 +176,8 @@ class MoodleBackupReader:
         byte-for-byte content is preserved (ET serialisation can reorder attributes
         and strip the XML declaration).  Returns None if the file does not exist.
         """
-        xml_path = extracted / relative_path
-        if not xml_path.exists():
+        xml_path = resolve_under(extracted, relative_path)
+        if not xml_path.is_file():
             return None
         return xml_path.read_text(encoding="utf-8")
 
@@ -191,8 +195,11 @@ class MoodleBackupReader:
         if not contenthash or len(contenthash) < 2:
             return None
         try:
-            return (extracted / "files" / contenthash[:2] / contenthash).read_bytes()
-        except (FileNotFoundError, KeyError):
+            file_path = resolve_under(
+                extracted, f"files/{contenthash[:2]}/{contenthash}"
+            )
+            return file_path.read_bytes()
+        except FileNotFoundError:
             return None
 
     def read_inforef(self, extracted: Path, activity_directory: str) -> List[str]:

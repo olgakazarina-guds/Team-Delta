@@ -6,14 +6,19 @@ course → chapters → sequentials → verticals → components (html, video, p
 Stores raw XML fragments for later domain entity mapping.
 """
 
+import logging
 import mimetypes
 import xml.etree.ElementTree as ET
-import uuid
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from core.archive_utils import resolve_under
+from core.errors import SecurityError, UnsafePathError
+from core.identity import sha256_bytes, stable_id
+from core.xml_utils import parse_xml_file
 from .package_reader import OpenEdxPackageReader
+
+logger = logging.getLogger(__name__)
 
 
 class OpenEdxCourseParser:
@@ -31,24 +36,28 @@ class OpenEdxCourseParser:
     def __init__(self):
         self.reader = OpenEdxPackageReader()
         self.fragments: List[Dict[str, Any]] = []
+        self._course_key = ""
 
     def parse(self, archive_path: str, work_dir: str) -> Dict[str, Any]:
         """Extract an Open edX export and return its structured course data."""
         self.fragments = []
+        self._course_key = ""
         extracted_root = self.reader.extract(archive_path, work_dir)
 
         root_course_xml = extracted_root / "course.xml"
         if root_course_xml.exists():
-            root = ET.parse(root_course_xml).getroot()
+            root = parse_xml_file(root_course_xml)
             url_name = root.attrib.get("url_name")
             org = root.attrib.get("org", "")
             course_code = root.attrib.get("course", "")
             if not url_name:
                 raise ValueError("course.xml missing url_name attribute")
-            actual_course_xml = extracted_root / "course" / f"{url_name}.xml"
+            actual_course_xml = self._xml_path(
+                extracted_root, "course", url_name, label="course url_name"
+            )
         else:
             actual_course_xml = self.reader.get_course_xml_path(extracted_root)
-            root = ET.parse(actual_course_xml).getroot()
+            root = parse_xml_file(actual_course_xml)
             url_name = root.attrib.get("url_name") or actual_course_xml.stem
             org = root.attrib.get("org", "")
             course_code = root.attrib.get("course", "")
@@ -56,15 +65,17 @@ class OpenEdxCourseParser:
         if not actual_course_xml.exists():
             raise FileNotFoundError(f"Course definition not found: {actual_course_xml}")
 
-        tree = ET.parse(actual_course_xml)
-        root = tree.getroot()
+        root = parse_xml_file(actual_course_xml)
         course_title = root.attrib.get("display_name", "Unnamed Course")
+        self._course_key = f"{org or 'org'}:{course_code or 'course'}:{url_name}"
 
         self._store_fragment(actual_course_xml, extracted_root)
         chapters = self._parse_chapters(root, extracted_root)
 
         return {
             "course_title": course_title,
+            "course_key": self._course_key,
+            "course_url_name": url_name,
             "org": org,
             "course_code": course_code,
             "chapters": chapters,
@@ -86,11 +97,15 @@ class OpenEdxCourseParser:
             relative_path = file_path.relative_to(extracted_root).as_posix()
             mime_type, _ = mimetypes.guess_type(file_path.name)
             is_video = bool(mime_type and mime_type.startswith("video/"))
+            checksum = _sha256_file(file_path)
             assets.append({
-                "asset_id": str(uuid.uuid4()),
+                "asset_id": stable_id(
+                    "asset", "openedx", self._course_key, relative_path, checksum
+                ),
                 "path": relative_path,
                 "original_filename": file_path.name,
                 "mime_type": mime_type,
+                "checksum": checksum,
                 "is_video": is_video,
                 "is_scorm": file_path.suffix.lower() == ".zip",
             })
@@ -99,19 +114,33 @@ class OpenEdxCourseParser:
     def _store_fragment(self, file_path: Path, extracted_root: Path) -> str:
         """Read an XML file, store it as a raw fragment, and return its ID."""
         raw_xml = file_path.read_text(encoding="utf-8")
-        fragment_id = str(uuid.uuid4())
+        relative_path = file_path.relative_to(extracted_root).as_posix()
+        fragment_id = stable_id("fragment", "openedx", relative_path)
         self.fragments.append({
             "fragment_id": fragment_id,
             "kind": "xml",
             "source_location": {
                 "source_system": "openedx",
-                "package_path": str(file_path.relative_to(extracted_root)),
+                "package_path": relative_path,
                 "file_path": str(file_path),
             },
             "raw_text": raw_xml,
-            "checksum": None,
+            "checksum": sha256_bytes(raw_xml.encode("utf-8")),
         })
         return fragment_id
+
+    def _xml_path(
+        self, extracted_root: Path, folder: str, url_name: str, *, label: str
+    ) -> Path:
+        """Resolve a package XML reference without allowing path traversal."""
+        if (
+            not url_name
+            or "/" in url_name
+            or "\\" in url_name
+            or url_name in {".", ".."}
+        ):
+            raise UnsafePathError(f"Invalid {label}: {url_name!r}")
+        return resolve_under(extracted_root / folder, f"{url_name}.xml")
 
     def _parse_chapters(self, root: ET.Element, extracted_root: Path) -> List[Dict[str, Any]]:
         """Parse all <chapter> elements from the course file."""
@@ -121,8 +150,11 @@ class OpenEdxCourseParser:
             if not chapter_url:
                 continue
 
-            chapter_file = extracted_root / "chapter" / f"{chapter_url}.xml"
+            chapter_file = self._xml_path(
+                extracted_root, "chapter", chapter_url, label="chapter url_name"
+            )
             if not chapter_file.exists():
+                logger.warning("Chapter XML not found: %s", chapter_file)
                 continue
 
             chapters.append(self._parse_chapter(chapter_file, extracted_root))
@@ -130,7 +162,7 @@ class OpenEdxCourseParser:
 
     def _parse_chapter(self, chapter_file: Path, extracted_root: Path) -> Dict[str, Any]:
         """Parse a single chapter XML file."""
-        root = ET.parse(chapter_file).getroot()
+        root = parse_xml_file(chapter_file)
         title = root.attrib.get("display_name", "Untitled Chapter")
         fragment_id = self._store_fragment(chapter_file, extracted_root)
 
@@ -140,8 +172,11 @@ class OpenEdxCourseParser:
             if not seq_url:
                 continue
 
-            seq_file = extracted_root / "sequential" / f"{seq_url}.xml"
+            seq_file = self._xml_path(
+                extracted_root, "sequential", seq_url, label="sequential url_name"
+            )
             if not seq_file.exists():
+                logger.warning("Sequential XML not found: %s", seq_file)
                 continue
 
             sequentials.append(self._parse_sequential(seq_file, extracted_root))
@@ -155,7 +190,7 @@ class OpenEdxCourseParser:
 
     def _parse_sequential(self, seq_file: Path, extracted_root: Path) -> Dict[str, Any]:
         """Parse a single sequential XML file."""
-        root = ET.parse(seq_file).getroot()
+        root = parse_xml_file(seq_file)
         title = root.attrib.get("display_name", "Untitled Sequential")
         fragment_id = self._store_fragment(seq_file, extracted_root)
 
@@ -165,8 +200,11 @@ class OpenEdxCourseParser:
             if not vert_url:
                 continue
 
-            vert_file = extracted_root / "vertical" / f"{vert_url}.xml"
+            vert_file = self._xml_path(
+                extracted_root, "vertical", vert_url, label="vertical url_name"
+            )
             if not vert_file.exists():
+                logger.warning("Vertical XML not found: %s", vert_file)
                 continue
 
             verticals.append(self._parse_vertical(vert_file, extracted_root))
@@ -180,7 +218,7 @@ class OpenEdxCourseParser:
 
     def _parse_vertical(self, vert_file: Path, extracted_root: Path) -> Dict[str, Any]:
         """Parse a vertical and all of its components."""
-        root = ET.parse(vert_file).getroot()
+        root = parse_xml_file(vert_file)
         title = root.attrib.get("display_name", "Untitled Vertical")
         fragment_id = self._store_fragment(vert_file, extracted_root)
 
@@ -274,29 +312,38 @@ class OpenEdxCourseParser:
             "scorm",
             "scormxblock",
         }
-        if comp_tag not in supported:
+        if comp_tag not in supported or not comp_url:
             return None
-        return extracted_root / comp_tag / f"{comp_url}.xml"
+        return self._xml_path(
+            extracted_root, comp_tag, comp_url, label=f"{comp_tag} url_name"
+        )
 
     def _read_wrapper(self, comp_file: Path) -> Optional[ET.Element]:
         try:
-            return ET.parse(comp_file).getroot()
-        except Exception:
+            return parse_xml_file(comp_file)
+        except SecurityError:
+            raise
+        except (OSError, ET.ParseError, UnicodeError):
+            logger.warning("Could not parse component wrapper: %s", comp_file)
             return None
 
     def _extract_html_content(self, comp_file: Path, extracted_root: Path) -> Optional[str]:
         """Extract the actual HTML from an html component wrapper."""
         try:
-            wrapper_root = ET.parse(comp_file).getroot()
+            wrapper_root = parse_xml_file(comp_file)
             html_filename = wrapper_root.get("filename")
             if not html_filename:
                 return None
 
             html_path = resolve_under(extracted_root / "html", html_filename)
             if not html_path.exists():
+                logger.warning("HTML payload not found: %s", html_path)
                 return None
             return html_path.read_text(encoding="utf-8")
-        except Exception:
+        except SecurityError:
+            raise
+        except (OSError, ET.ParseError, UnicodeError):
+            logger.warning("Could not read HTML component: %s", comp_file)
             return None
 
     def _extract_video_metadata(
@@ -360,3 +407,14 @@ class OpenEdxCourseParser:
                 if text:
                     prompts.append(text)
         return "\n".join(prompts) if prompts else None
+
+
+def _sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    """Hash a file without loading it entirely into memory."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
