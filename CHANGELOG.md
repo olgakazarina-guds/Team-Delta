@@ -8,6 +8,7 @@ The format follows Keep a Changelog, and the project intends to use semantic ver
 
 ### Added
 
+- Apache-2.0 license.
 - Deterministic canonical identifiers derived from stable source keys.
 - Archive extraction limits and path-containment checks.
 - Defused XML parsing with configurable size limits.
