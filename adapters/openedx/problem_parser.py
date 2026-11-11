@@ -4,9 +4,9 @@ Open edX Problem Parser – Parses problem XMLs into structured question dicts.
 Extracts questions from Open edX problem XMLs supporting:
 multiplechoiceresponse (multichoice, truefalse)
 choiceresponse (single-select, multi-select)
-textinput (shortanswer)
-numericalinput (numerical)
-stringresponse (legacy text input)
+stringresponse (shortanswer)
+numericalresponse (numerical)
+textinput / numericalinput (legacy custom markup)
 formularesponse, coderesponse, customresponse (placeholders)
 """
 
@@ -50,14 +50,14 @@ def parse_problem(problem_xml: str, problem_url_name: str) -> Dict[str, Any]:
     # 2. Multiple Choice (legacy) – <choiceresponse>
     questions.extend(_parse_choice_responses(root))
 
-    # 3. Short Answer – <textinput>
+    # 3. Short Answer – <stringresponse>
+    questions.extend(_parse_string_responses(root))
+
+    # 4. Legacy custom short answer – <textinput>
     questions.extend(_parse_text_inputs(root))
 
-    # 4. Numerical – <numericalinput>
+    # 5. Numerical – <numericalresponse> / legacy <numericalinput>
     questions.extend(_parse_numerical_inputs(root))
-
-    # 5. Legacy String Response – <stringresponse>
-    questions.extend(_parse_string_responses(root))
 
     # 6. Formula, Code, Custom – placeholders
     questions.extend(_parse_formula_responses(root))
@@ -131,10 +131,10 @@ def _parse_choice_responses(root: ET.Element) -> List[Dict[str, Any]]:
         radiogroup = choiceresponse.find("radiogroup")
 
         if checkboxgroup is not None:
-            q_type = "multi-select"
+            q_type = "multiselect"
             choices = checkboxgroup.findall("choice")
         elif radiogroup is not None:
-            q_type = "single-select"
+            q_type = "multichoice"
             choices = radiogroup.findall("choice")
         else:
             choices = []
@@ -170,8 +170,51 @@ def _parse_choice_responses(root: ET.Element) -> List[Dict[str, Any]]:
     return questions
 
 
+def _parse_string_responses(root: ET.Element) -> List[Dict[str, Any]]:
+    """
+    Parse standard <stringresponse> elements (text input questions).
+
+    The primary answer is stored in the ``answer`` attribute; additional
+    accepted answers use <additional_answer answer="..."/> children. Legacy
+    files may instead list answers as <answer> children.
+    """
+    questions = []
+    for stringresponse in root.findall(".//stringresponse"):
+        label_elem = stringresponse.find("label")
+        prompt = (
+            label_elem.text.strip()
+            if label_elem is not None and label_elem.text
+            else ""
+        )
+
+        correct_answers = []
+        primary = stringresponse.attrib.get("answer")
+        if primary:
+            correct_answers.append(primary.strip())
+        for additional in stringresponse.findall("additional_answer"):
+            answer = additional.attrib.get("answer")
+            if answer:
+                correct_answers.append(answer.strip())
+        for ans in stringresponse.findall("answer"):
+            if ans.text:
+                correct_answers.append(ans.text.strip())
+
+        points = float(stringresponse.attrib.get("points", 1.0))
+
+        questions.append({
+            "question_id": str(uuid.uuid4()),
+            "type": "shortanswer",
+            "prompt": prompt,
+            "points": points,
+            "correct_answers": correct_answers,
+            "answer_options": [],
+        })
+
+    return questions
+
+
 def _parse_text_inputs(root: ET.Element) -> List[Dict[str, Any]]:
-    """Parse <textinput> elements (shortanswer questions)."""
+    """Parse legacy custom <textinput> elements (shortanswer questions)."""
     questions = []
     for textinput in root.findall(".//textinput"):
         label_elem = textinput.find("label")
@@ -199,20 +242,24 @@ def _parse_text_inputs(root: ET.Element) -> List[Dict[str, Any]]:
 
 
 def _parse_numerical_inputs(root: ET.Element) -> List[Dict[str, Any]]:
-    """Parse <numericalinput> elements (numerical questions)."""
+    """Parse standard <numericalresponse> and legacy <numericalinput> elements."""
     questions = []
-    for numericalinput in root.findall(".//numericalinput"):
-        label_elem = numericalinput.find("label")
+    elements = root.findall(".//numericalresponse") + root.findall(
+        ".//numericalinput"
+    )
+    for element in elements:
+        label_elem = element.find("label")
         prompt = (
             label_elem.text.strip()
             if label_elem is not None and label_elem.text
             else ""
         )
 
-        response = numericalinput.find("response")
-        correct_answer = ""
-        if response is not None:
-            correct_answer = response.attrib.get("correct_answer", "")
+        correct_answer = element.attrib.get("answer", "")
+        if not correct_answer:
+            response = element.find("response")
+            if response is not None:
+                correct_answer = response.attrib.get("correct_answer", "")
 
         questions.append({
             "question_id": str(uuid.uuid4()),
@@ -220,40 +267,6 @@ def _parse_numerical_inputs(root: ET.Element) -> List[Dict[str, Any]]:
             "prompt": prompt,
             "points": 1.0,
             "correct_answer": correct_answer,
-            "answer_options": [],
-        })
-
-    return questions
-
-
-def _parse_string_responses(root: ET.Element) -> List[Dict[str, Any]]:
-    """
-    Parse legacy <stringresponse> elements (text input questions).
-
-    Supports multiple correct answers via <answer> children.
-    """
-    questions = []
-    for stringresponse in root.findall(".//stringresponse"):
-        label_elem = stringresponse.find("label")
-        prompt = (
-            label_elem.text.strip()
-            if label_elem is not None and label_elem.text
-            else ""
-        )
-
-        correct_answers = []
-        for ans in stringresponse.findall("answer"):
-            if ans.text:
-                correct_answers.append(ans.text.strip())
-
-        points = float(stringresponse.attrib.get("points", 1.0))
-
-        questions.append({
-            "question_id": str(uuid.uuid4()),
-            "type": "text_input",
-            "prompt": prompt,
-            "points": points,
-            "correct_answers": correct_answers,
             "answer_options": [],
         })
 

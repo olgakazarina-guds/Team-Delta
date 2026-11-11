@@ -11,54 +11,31 @@ Transforms parsed Open edX or Moodle data into canonical domain entities:
 - RawFragment
 """
 
-import uuid
 import logging
-from typing import Dict, Any, List, Optional
+import uuid
+from typing import Any, Dict, List
 
-from domain.entities import (
-    Course,
-    ContentNode,
-    Assessment,
-    Question,
-    AnswerOption,
-    Asset,
-    RawFragment,
-    MappingNote,
-)
-from domain.enums import SourceSystem, NodeType, AssessmentType, Severity
 from adapters.openedx.problem_parser import parse_problem
+from domain.entities import (
+    AnswerOption,
+    Assessment,
+    Asset,
+    ContentNode,
+    Course,
+    Question,
+    RawFragment,
+    ScormAsset,
+)
+from domain.enums import AssessmentType, NodeType, SourceSystem
 
 logger = logging.getLogger(__name__)
 
+
 class TransformService:
-    """
-    Service responsible for transforming parsed LMS data into normalized domain entities.
-
-    Supports:
-    - Open edX -> canonical Course
-    - Moodle -> canonical Course
-
-    Builds hierarchical content structures and extracts assessments/problems
-    with their questions and answer options.
-    """
+    """Transform parsed LMS data into canonical domain entities."""
 
     def transform(self, parsed: Dict[str, Any], source_type: str, job_id: str) -> Course:
-        """
-        Entry point for transformation logic.
-
-        Routes to source-specific transformation methods based on the input type.
-
-        Args:
-            parsed: Parsed data dictionary from the source LMS
-            source_type: Identifier for the source system ("openedx" or "moodle")
-            job_id: Unique identifier for the transformation job/course
-
-        Returns:
-            Transformed Course domain object
-
-        Raises:
-            ValueError: If source_type is not supported
-        """
+        """Route parsed data to the appropriate source-specific transformer."""
         logger.info("Transforming %s parse output to canonical IR (job %s)", source_type, job_id)
         if source_type == "openedx":
             course = self._transform_openedx(parsed, job_id)
@@ -67,148 +44,17 @@ class TransformService:
         else:
             logger.error("Unsupported source type: %s", source_type)
             raise ValueError(f"Unsupported source type: {source_type}")
-        logger.debug("Built course '%s' with %d top-level nodes, %d assets",course.title, len(course.content_nodes), len(course.assets),)
+
+        logger.debug(
+            "Built course '%s' with %d top-level nodes, %d assets",
+            course.title,
+            len(course.content_nodes),
+            len(course.assets),
+        )
         return course
 
-    def _transform_openedx(self, parsed: dict, job_id: str) -> Course:
-        raw_fragments = []
-        for frag in parsed.get("raw_fragments", []):
-            raw_fragments.append(RawFragment(
-                fragment_id=frag["fragment_id"],
-                kind=frag["kind"],
-                source_location=frag["source_location"],
-                raw_text=frag.get("raw_text"),
-                raw_bytes_ref=frag.get("raw_bytes_ref"),
-                checksum=frag.get("checksum")
-            ))
-
-        assessments = []
-        questions = []
-        answer_options = []
-        content_nodes = []
-        node_id_map = {}
-
-        for chapter_idx, chapter in enumerate(parsed.get("chapters", [])):
-            chapter_node = ContentNode(
-                node_id=str(uuid.uuid4()),
-                node_type=NodeType.CHAPTER,
-                title=chapter.get("title"),
-                position=chapter_idx,
-                raw_fragment_ids=[chapter["raw_fragment_id"]] if chapter.get("raw_fragment_id") else []
-            )
-            node_id_map[chapter["url_name"]] = chapter_node.node_id
-            content_nodes.append(chapter_node)
-
-            for seq_idx, seq in enumerate(chapter.get("sequentials", [])):
-                seq_node = ContentNode(
-                    node_id=str(uuid.uuid4()),
-                    node_type=NodeType.SEQUENTIAL,
-                    title=seq.get("title"),
-                    parent_id=chapter_node.node_id,
-                    position=seq_idx,
-                    raw_fragment_ids=[seq["raw_fragment_id"]] if seq.get("raw_fragment_id") else []
-                )
-                node_id_map[seq["url_name"]] = seq_node.node_id
-                chapter_node.children.append(seq_node)
-
-                for vert_idx, vert in enumerate(seq.get("verticals", [])):
-                    vert_node = ContentNode(
-                        node_id=str(uuid.uuid4()),
-                        node_type=NodeType.VERTICAL,
-                        title=vert.get("title"),
-                        parent_id=seq_node.node_id,
-                        position=vert_idx,
-                        raw_fragment_ids=[vert["raw_fragment_id"]] if vert.get("raw_fragment_id") else []
-                    )
-                    node_id_map[vert["url_name"]] = vert_node.node_id
-                    seq_node.children.append(vert_node)
-
-                    for comp_idx, comp in enumerate(vert.get("components", [])):
-                        comp_type_map = {
-                            "html": NodeType.HTML,
-                            "video": NodeType.VIDEO,
-                            "problem": NodeType.PROBLEM,
-                            "openassessment": NodeType.OPENASSESSMENT,
-                            "lti": NodeType.LTI
-                        }
-                        node_type = comp_type_map.get(comp["type"], NodeType.UNKNOWN)
-
-                        metadata = {}
-                        if comp.get("inline_xml"):
-                            metadata["inline_xml"] = comp["inline_xml"]
-                        if node_type == NodeType.HTML and comp.get("content_html"):
-                            metadata["content_html"] = comp["content_html"]
-
-                        comp_node = ContentNode(
-                            node_id=str(uuid.uuid4()),
-                            node_type=node_type,
-                            title=comp.get("title", ""),
-                            parent_id=vert_node.node_id,
-                            position=comp_idx,
-                            raw_fragment_ids=[comp["raw_fragment_id"]] if comp.get("raw_fragment_id") else [],
-                            metadata=metadata
-                        )
-                        vert_node.children.append(comp_node)
-
-                        # ---------- Handle problem component ----------
-                        if node_type == NodeType.PROBLEM and comp.get("raw_fragment_id"):
-                            raw_frag = next((f for f in raw_fragments if f.fragment_id == comp["raw_fragment_id"]), None)
-                            if raw_frag and raw_frag.raw_text:
-                                # Parse problem XML
-                                problem_data = parse_problem(raw_frag.raw_text, comp.get("url_name", ""))
-                                # Create a single assessment for this problem
-                                assessment_id = str(uuid.uuid4())
-                                assessment = Assessment(
-                                    assessment_id=assessment_id,
-                                    course_id=job_id,
-                                    title=problem_data["assessment_title"],
-                                    assessment_type=AssessmentType.QUIZ,
-                                    max_score=sum(q.get("points", 0) for q in problem_data["questions"]),
-                                    raw_fragment_ids=[comp["raw_fragment_id"]],
-                                    metadata={"problem_url_name": comp.get("url_name"), "original_type": "problem"}
-                                )
-                                assessments.append(assessment)
-                                comp_node.assessment_id = assessment_id
-
-                                # Create question and answer options for each question
-                                for q_data in problem_data["questions"]:
-                                    question = Question(
-                                        question_id=q_data["question_id"],
-                                        assessment_id=assessment_id,
-                                        question_type=q_data["type"],
-                                        prompt_text=q_data["prompt"],
-                                        points=q_data.get("points", 1.0),
-                                        raw_fragment_ids=[comp["raw_fragment_id"]],
-                                        metadata={}
-                                    )
-                                    questions.append(question)
-                                    for opt in q_data.get("answer_options", []):
-                                        answer_options.append(AnswerOption(
-                                            option_id=str(uuid.uuid4()),
-                                            question_id=question.question_id,
-                                            text=opt["text"],
-                                            is_correct=opt["is_correct"]
-                                        ))
-
-        return Course(
-            course_id=job_id,
-            title=parsed.get("course_title", "Unnamed Course"),
-            source_system=SourceSystem.OPENEDX,
-            content_nodes=content_nodes,
-            assessments=assessments,
-            questions=questions,
-            answer_options=answer_options,
-            raw_fragments=raw_fragments,
-            metadata={
-                "org": parsed.get("org"),
-                "course_code": parsed.get("course_code"),
-                "extracted_path": parsed.get("extracted_path")
-            }
-        )
-
-
     def _build_raw_fragments(self, parsed: Dict[str, Any]) -> List[RawFragment]:
-        """Build list of RawFragment entities from parsed data."""
+        """Build RawFragment entities from parsed data."""
         raw_fragments = []
         for frag in parsed.get("raw_fragments", []):
             raw_fragments.append(
@@ -223,142 +69,143 @@ class TransformService:
             )
         return raw_fragments
 
-    def _create_chapter_node(self, chapter: Dict[str, Any], index: int) -> ContentNode:
-        """Create a chapter ContentNode."""
-        return ContentNode(
-            node_id=str(uuid.uuid4()),
-            node_type=NodeType.CHAPTER,
-            title=chapter.get("title"),
-            position=index,
-            raw_fragment_ids=[chapter["raw_fragment_id"]]
-            if chapter.get("raw_fragment_id")
-            else [],
-        )
+    def _transform_openedx(self, parsed: dict, job_id: str) -> Course:
+        raw_fragments = self._build_raw_fragments(parsed)
+        assessments: List[Assessment] = []
+        questions: List[Question] = []
+        answer_options: List[AnswerOption] = []
+        content_nodes: List[ContentNode] = []
+        assets = [
+            self._asset_from_dict(asset_data, job_id)
+            for asset_data in parsed.get("assets", [])
+        ]
+        assets_by_path = {asset.path: asset for asset in assets}
 
-    def _create_sequential_node(
-        self, seq: Dict[str, Any], index: int, parent_id: str
-    ) -> ContentNode:
-        """Create a sequential ContentNode."""
-        return ContentNode(
-            node_id=str(uuid.uuid4()),
-            node_type=NodeType.SEQUENTIAL,
-            title=seq.get("title"),
-            parent_id=parent_id,
-            position=index,
-            raw_fragment_ids=[seq["raw_fragment_id"]]
-            if seq.get("raw_fragment_id")
-            else [],
-        )
-
-    def _create_vertical_node(
-        self, vert: Dict[str, Any], index: int, parent_id: str
-    ) -> ContentNode:
-        """Create a vertical ContentNode."""
-        return ContentNode(
-            node_id=str(uuid.uuid4()),
-            node_type=NodeType.VERTICAL,
-            title=vert.get("title"),
-            parent_id=parent_id,
-            position=index,
-            raw_fragment_ids=[vert["raw_fragment_id"]]
-            if vert.get("raw_fragment_id")
-            else [],
-        )
-
-    def _process_components(
-        self,
-        vert_node: ContentNode,
-        components: List[Dict[str, Any]],
-        assessments: List[Assessment],
-        questions: List[Question],
-        answer_options: List[AnswerOption],
-        raw_fragments: List[RawFragment],
-    ) -> None:
-        """
-        Process all components within a vertical.
-
-        Creates component ContentNodes and extracts assessments from problem components.
-        """
-        comp_type_map = {
+        component_types = {
             "html": NodeType.HTML,
             "video": NodeType.VIDEO,
             "problem": NodeType.PROBLEM,
             "openassessment": NodeType.OPENASSESSMENT,
+            "discussion": NodeType.FORUM,
             "lti": NodeType.LTI,
+            "scorm": NodeType.SCORM,
+            "scormxblock": NodeType.SCORM,
         }
 
-        for comp_idx, comp in enumerate(components):
-            node_type = comp_type_map.get(comp["type"], NodeType.UNKNOWN)
-
-            # Prepare metadata
-            metadata = self._build_component_metadata(comp, node_type)
-
-            # Handle problem components: parse and extract assessments
-            assessment_id = None
-            if node_type == NodeType.PROBLEM and comp.get("raw_fragment_id"):
-                assessment_id, new_questions, new_answer_options = (
-                    self._extract_problem_assessment(comp, raw_fragments)
-                )
-                questions.extend(new_questions)
-                answer_options.extend(new_answer_options)
-
-            # Create component node
-            comp_node = ContentNode(
+        for chapter_idx, chapter in enumerate(parsed.get("chapters", [])):
+            chapter_node = ContentNode(
                 node_id=str(uuid.uuid4()),
-                node_type=node_type,
-                title=comp.get("title", ""),
-                parent_id=vert_node.node_id,
-                position=comp_idx,
-                raw_fragment_ids=[comp["raw_fragment_id"]]
-                if comp.get("raw_fragment_id")
+                node_type=NodeType.CHAPTER,
+                title=chapter.get("title"),
+                position=chapter_idx,
+                raw_fragment_ids=[chapter["raw_fragment_id"]]
+                if chapter.get("raw_fragment_id")
                 else [],
-                metadata=metadata,
             )
+            content_nodes.append(chapter_node)
 
-            if assessment_id:
-                comp_node.assessment_id = assessment_id
+            for seq_idx, seq in enumerate(chapter.get("sequentials", [])):
+                seq_node = ContentNode(
+                    node_id=str(uuid.uuid4()),
+                    node_type=NodeType.SEQUENTIAL,
+                    title=seq.get("title"),
+                    parent_id=chapter_node.node_id,
+                    position=seq_idx,
+                    raw_fragment_ids=[seq["raw_fragment_id"]]
+                    if seq.get("raw_fragment_id")
+                    else [],
+                )
+                chapter_node.children.append(seq_node)
 
-            vert_node.children.append(comp_node)
+                for vert_idx, vert in enumerate(seq.get("verticals", [])):
+                    vert_node = ContentNode(
+                        node_id=str(uuid.uuid4()),
+                        node_type=NodeType.VERTICAL,
+                        title=vert.get("title"),
+                        parent_id=seq_node.node_id,
+                        position=vert_idx,
+                        raw_fragment_ids=[vert["raw_fragment_id"]]
+                        if vert.get("raw_fragment_id")
+                        else [],
+                    )
+                    seq_node.children.append(vert_node)
 
-    def _build_component_metadata(
-        self, comp: Dict[str, Any], node_type: NodeType
-    ) -> Dict[str, Any]:
-        """Build metadata dictionary for a component node."""
-        metadata = {}
+                    for comp_idx, comp in enumerate(vert.get("components", [])):
+                        node_type = component_types.get(comp.get("type"), NodeType.UNKNOWN)
+                        metadata = dict(comp.get("metadata") or {})
+                        if comp.get("inline_xml"):
+                            metadata["inline_xml"] = comp["inline_xml"]
+                        if comp.get("content_html"):
+                            metadata["content_html"] = comp["content_html"]
+                        asset_path = metadata.get("asset_path")
+                        if asset_path and asset_path in assets_by_path:
+                            metadata["asset_id"] = assets_by_path[asset_path].asset_id
 
-        if comp.get("inline_xml"):
-            metadata["inline_xml"] = comp["inline_xml"]
+                        comp_node = ContentNode(
+                            node_id=str(uuid.uuid4()),
+                            node_type=node_type,
+                            title=comp.get("title", ""),
+                            parent_id=vert_node.node_id,
+                            position=comp_idx,
+                            raw_fragment_ids=[comp["raw_fragment_id"]]
+                            if comp.get("raw_fragment_id")
+                            else [],
+                            metadata=metadata,
+                        )
+                        vert_node.children.append(comp_node)
 
-        if node_type == NodeType.HTML and comp.get("content_html"):
-            metadata["content_html"] = comp["content_html"]
+                        if node_type == NodeType.PROBLEM and comp.get("raw_fragment_id"):
+                            raw_frag = next(
+                                (
+                                    f
+                                    for f in raw_fragments
+                                    if f.fragment_id == comp["raw_fragment_id"]
+                                ),
+                                None,
+                            )
+                            if raw_frag and raw_frag.raw_text:
+                                self._add_openedx_problem(
+                                    raw_frag.raw_text,
+                                    comp,
+                                    comp_node,
+                                    job_id,
+                                    assessments,
+                                    questions,
+                                    answer_options,
+                                )
 
-        return metadata
-
-    def _extract_problem_assessment(
-        self, comp: Dict[str, Any], raw_fragments: List[RawFragment]
-    ) -> tuple:
-        """
-        Extract assessment, questions, and answer options from a problem component.
-
-        Returns:
-            Tuple of (assessment_id, questions_list, answer_options_list)
-        """
-        raw_frag = next(
-            (f for f in raw_fragments if f.fragment_id == comp["raw_fragment_id"]),
-            None,
+        return Course(
+            course_id=job_id,
+            title=parsed.get("course_title", "Unnamed Course"),
+            source_system=SourceSystem.OPENEDX,
+            content_nodes=content_nodes,
+            assessments=assessments,
+            questions=questions,
+            answer_options=answer_options,
+            assets=assets,
+            raw_fragments=raw_fragments,
+            metadata={
+                "org": parsed.get("org"),
+                "course_code": parsed.get("course_code"),
+                "extracted_path": parsed.get("extracted_path"),
+            },
         )
 
-        if not raw_frag or not raw_frag.raw_text:
-            return None, [], []
-
-        # Parse the problem XML into structured data
-        problem_data = parse_problem(raw_frag.raw_text, comp.get("url_name", ""))
-
-        # Create assessment entity
+    def _add_openedx_problem(
+        self,
+        raw_problem_xml: str,
+        comp: Dict[str, Any],
+        comp_node: ContentNode,
+        job_id: str,
+        assessments: List[Assessment],
+        questions: List[Question],
+        answer_options: List[AnswerOption],
+    ) -> None:
+        problem_data = parse_problem(raw_problem_xml, comp.get("url_name", ""))
         assessment_id = str(uuid.uuid4())
         assessment = Assessment(
             assessment_id=assessment_id,
-            course_id="",  # Will be set by parent
+            course_id=job_id,
             title=problem_data["assessment_title"],
             assessment_type=AssessmentType.QUIZ,
             max_score=sum(q.get("points", 0) for q in problem_data["questions"]),
@@ -368,85 +215,62 @@ class TransformService:
                 "original_type": "problem",
             },
         )
-
-        # Note: assessment is added by caller, we only return the ID and children
-        questions = []
-        answer_options = []
+        assessments.append(assessment)
+        comp_node.assessment_id = assessment_id
 
         for q_data in problem_data["questions"]:
+            question_type = self._normalise_question_type(q_data.get("type", "unknown"))
+            q_metadata: Dict[str, Any] = {}
+            if q_data.get("correct_answers"):
+                q_metadata["correct_answers"] = q_data["correct_answers"]
+            if q_data.get("correct_answer") is not None:
+                q_metadata["correct_answer"] = q_data["correct_answer"]
+
             question = Question(
                 question_id=q_data["question_id"],
                 assessment_id=assessment_id,
-                question_type=q_data["type"],
-                prompt_text=q_data["prompt"],
+                question_type=question_type,
+                prompt_text=q_data.get("prompt", ""),
                 points=q_data.get("points", 1.0),
                 raw_fragment_ids=[comp["raw_fragment_id"]],
-                metadata={},
+                metadata=q_metadata,
             )
             questions.append(question)
 
             for opt in q_data.get("answer_options", []):
-                answer_option = AnswerOption(
-                    option_id=str(uuid.uuid4()),
-                    question_id=question.question_id,
-                    text=opt["text"],
-                    is_correct=opt["is_correct"],
+                answer_options.append(
+                    AnswerOption(
+                        option_id=str(uuid.uuid4()),
+                        question_id=question.question_id,
+                        text=opt["text"],
+                        is_correct=opt["is_correct"],
+                    )
                 )
-                answer_options.append(answer_option)
-
-        return assessment_id, questions, answer_options
 
     def _transform_moodle(self, parsed: Dict[str, Any], job_id: str) -> Course:
-        """
-        Transform parsed Moodle course data into domain entities.
-
-        Builds a hierarchical content structure (Section -> Content -> Activity -> Component)
-        and extracts assessments/questions from quiz activities.
-
-        Args:
-            parsed: Parsed Moodle course data
-            job_id: Unique course identifier
-
-        Returns:
-            Fully transformed Course object with all nested entities
-        """
-        # Step 1: Extract raw fragments
         raw_fragments = self._build_raw_fragments(parsed)
-
-        # Step 2: Initialize containers
         content_nodes: List[ContentNode] = []
         assessments: List[Assessment] = []
         assets: List[Asset] = []
         questions: List[Question] = []
         answer_options: List[AnswerOption] = []
 
-        # Step 3: Build question bank map (original_moodle_id -> question data)
         question_bank = self._build_question_bank(parsed)
-
-        # Step 4: Create assessments per quiz activity
         quiz_activities = self._find_quiz_activities(parsed)
         self._create_quiz_assessments(
-            parsed, job_id, quiz_activities, question_bank, assessments, questions, answer_options
+            parsed,
+            job_id,
+            quiz_activities,
+            question_bank,
+            assessments,
+            questions,
+            answer_options,
         )
+        self._build_moodle_content_tree(parsed, content_nodes)
 
-        # Step 5: Build hierarchical content nodes
-        self._build_moodle_content_tree(
-            parsed, quiz_activities, content_nodes, assessments
-        )
+        for asset_data in parsed.get("assets", []):
+            assets.append(self._asset_from_dict(asset_data, parsed.get("course_id") or job_id))
 
-        # Step 6: Build asset entities
-        for a in parsed.get("assets", []):
-            assets.append(
-                Asset(
-                    asset_id=a["asset_id"],
-                    course_id=parsed.get("course_id") or job_id,
-                    path=a.get("path", ""),
-                    mime_type=a.get("mime_type"),
-                    checksum=a.get("checksum"),
-                )
-            )
-
-        # Step 7: Assemble and return the Course domain object
         return Course(
             course_id=parsed.get("course_id") or job_id,
             title=parsed.get("course_title", "Unnamed Course"),
@@ -464,24 +288,22 @@ class TransformService:
         )
 
     def _build_question_bank(self, parsed: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-        """
-        Build a map from original Moodle question ID to its data.
-
-        Returns:
-            Dict mapping original_moodle_id -> question data
-        """
+        """Build a map from original Moodle question ID to question data."""
         question_bank = {}
         for qa in parsed.get("questions_assessments", []):
-            for q in qa["questions"]:
+            for q in qa.get("questions", []):
                 orig_id = q.get("original_moodle_id")
-                if orig_id:
-                    question_bank[orig_id] = {
-                        "question_id": q["question_id"],
-                        "question_type": q["question_type"],
-                        "prompt_text": q["prompt_text"],
-                        "points": q["points"],
-                        "answer_options": q.get("answer_options", []),
-                    }
+                if not orig_id:
+                    continue
+                question_bank[orig_id] = {
+                    "question_id": q["question_id"],
+                    "question_type": q["question_type"],
+                    "prompt_text": q.get("prompt_text", ""),
+                    "points": q.get("points", 1.0),
+                    "answer_options": q.get("answer_options", []),
+                    "correct_answers": q.get("correct_answers", []),
+                    "metadata": q.get("metadata", {}),
+                }
         return question_bank
 
     def _find_quiz_activities(self, parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -503,44 +325,44 @@ class TransformService:
         questions: List[Question],
         answer_options: List[AnswerOption],
     ) -> None:
-        """
-        Create Assessment and Question entities for each quiz activity.
-
-        Groups all questions for a quiz into a single assessment.
-        """
+        """Create Assessment and Question entities for each Moodle quiz."""
         for act in quiz_activities:
             qids = act.get("metadata", {}).get("question_ids", [])
-            if not qids:
-                continue
-
-            # Get question data from the bank
             questions_for_quiz = [
                 question_bank[qid] for qid in qids if qid in question_bank
             ]
             if not questions_for_quiz:
                 continue
 
-            # Create assessment
             assessment_id = str(uuid.uuid4())
             assessment = Assessment(
                 assessment_id=assessment_id,
                 course_id=parsed.get("course_id") or job_id,
                 title=act.get("title", "Quiz"),
                 assessment_type=AssessmentType.QUIZ,
+                max_score=sum(q.get("points", 0) for q in questions_for_quiz),
                 raw_fragment_ids=[],
                 metadata={"quiz_activity_id": act.get("cmid")},
             )
             assessments.append(assessment)
 
-            # Create Question entities
             for q_data in questions_for_quiz:
+                metadata = dict(q_data.get("metadata") or {})
+                if q_data.get("correct_answers"):
+                    metadata["correct_answers"] = q_data["correct_answers"]
+                if metadata.get("correct_answer") is None and q_data.get("correct_answers"):
+                    metadata["correct_answer"] = q_data["correct_answers"][0]
+
                 question = Question(
                     question_id=q_data["question_id"],
                     assessment_id=assessment_id,
-                    question_type=q_data["question_type"],
-                    prompt_text=q_data["prompt_text"],
-                    points=q_data["points"],
+                    question_type=self._normalise_question_type(
+                        q_data["question_type"]
+                    ),
+                    prompt_text=q_data.get("prompt_text", ""),
+                    points=q_data.get("points", 1.0),
                     raw_fragment_ids=[],
+                    metadata=metadata,
                 )
                 questions.append(question)
 
@@ -554,21 +376,13 @@ class TransformService:
                         )
                     )
 
-            # Link activity to assessment
             act["assessment_id"] = assessment_id
 
     def _build_moodle_content_tree(
-        self,
-        parsed: Dict[str, Any],
-        quiz_activities: List[Dict[str, Any]],
-        content_nodes: List[ContentNode],
-        assessments: List[Assessment],
+        self, parsed: Dict[str, Any], content_nodes: List[ContentNode]
     ) -> None:
-        """Build hierarchical content tree for Moodle (Section -> Content -> Activity -> Component)."""
-        quiz_activity_map = {act.get("cmid"): act for act in quiz_activities}
-
+        """Build the Moodle Section -> Activity -> Component hierarchy."""
         for section_idx, section in enumerate(parsed.get("sections", [])):
-            # Create chapter node (section)
             chapter_node = ContentNode(
                 node_id=str(uuid.uuid4()),
                 node_type=NodeType.CHAPTER,
@@ -581,7 +395,6 @@ class TransformService:
             )
             content_nodes.append(chapter_node)
 
-            # Create sequential node (Content container)
             seq_node = ContentNode(
                 node_id=str(uuid.uuid4()),
                 node_type=NodeType.SEQUENTIAL,
@@ -591,7 +404,6 @@ class TransformService:
             )
             chapter_node.children.append(seq_node)
 
-            # Process activities
             for act_idx, act in enumerate(section.get("activities", [])):
                 vert_node = ContentNode(
                     node_id=str(uuid.uuid4()),
@@ -602,220 +414,164 @@ class TransformService:
                     raw_fragment_ids=[act["raw_fragment_id"]]
                     if act.get("raw_fragment_id")
                     else [],
-                    metadata={"moodle_cmid": act.get("cmid")},
+                    metadata={
+                        "moodle_cmid": act.get("cmid"),
+                        "moodle_section_id": section.get("section_id"),
+                    },
                 )
                 seq_node.children.append(vert_node)
+                vert_node.children.append(self._moodle_component(act, vert_node))
 
-                # Create component node based on module type
-                comp = self._create_moodle_component(act)
-                vert_node.children.append(comp)
+    def _moodle_component(self, act: Dict[str, Any], parent: ContentNode) -> ContentNode:
+        module = act.get("module_name", "")
+        node_type_str = act.get("node_type", "")
+        content_html = act.get("content_html", "")
+        metadata = dict(act.get("metadata") or {})
+        assessment_id = act.get("assessment_id")
 
-    def _transform_moodle(self, parsed: dict, job_id: str) -> Course:
-        raw_fragments = []
-        for frag in parsed.get("raw_fragments", []):
-            raw_fragments.append(RawFragment(
-                fragment_id=frag["fragment_id"],
-                kind=frag["kind"],
-                source_location=frag["source_location"],
-                raw_text=frag.get("raw_text"),
-                raw_bytes_ref=frag.get("raw_bytes_ref"),
-                checksum=frag.get("checksum")
-            ))
-
-        content_nodes = []
-        assessments = []
-        assets = []
-        questions = []
-        answer_options = []
-
-        # Build map from original Moodle question ID to its data
-        question_bank = {}
-        for qa in parsed.get("questions_assessments", []):
-            for q in qa["questions"]:
-                orig_id = q.get("original_moodle_id")
-                if orig_id:
-                    question_bank[orig_id] = {
-                        "question_id": q["question_id"],
-                        "question_type": q["question_type"],
-                        "prompt_text": q["prompt_text"],
-                        "points": q["points"],
-                        "answer_options": q.get("answer_options", []),
-                    }
-
-        # Collect all quiz activities
-        quiz_activities = []
-        for section in parsed.get("sections", []):
-            for act in section.get("activities", []):
-                if act.get("module_name") == "quiz":
-                    quiz_activities.append(act)
-
-        # For each quiz, create a single assessment that contains all its questions
-        for act in quiz_activities:
-            qids = act.get("metadata", {}).get("question_ids", [])
-            if not qids:
-                continue
-            questions_for_quiz = []
-            for qid in qids:
-                if qid in question_bank:
-                    questions_for_quiz.append(question_bank[qid])
-            if not questions_for_quiz:
-                continue
-
-            assessment_id = str(uuid.uuid4())
-            assessment = Assessment(
-                assessment_id=assessment_id,
-                course_id=parsed.get("course_id") or job_id,
-                title=act.get("title", "Quiz"),
-                assessment_type=AssessmentType.QUIZ,
-                raw_fragment_ids=[],
-                metadata={"quiz_activity_id": act.get("cmid")}
-            )
-            assessments.append(assessment)
-
-            for q_data in questions_for_quiz:
-                question = Question(
-                    question_id=q_data["question_id"],
-                    assessment_id=assessment_id,
-                    question_type=q_data["question_type"],
-                    prompt_text=q_data["prompt_text"],
-                    points=q_data["points"],
-                    raw_fragment_ids=[],
-                )
-                questions.append(question)
-                for opt in q_data.get("answer_options", []):
-                    answer_options.append(AnswerOption(
-                        option_id=str(uuid.uuid4()),
-                        question_id=question.question_id,
-                        text=opt["text"],
-                        is_correct=opt["is_correct"],
-                    ))
-
-            act["assessment_id"] = assessment_id
-
-        # Build hierarchical content nodes
-        for section_idx, section in enumerate(parsed.get("sections", [])):
-            chapter_node = ContentNode(
+        if module in ("page", "label") or node_type_str in ("page", "html"):
+            return ContentNode(
                 node_id=str(uuid.uuid4()),
-                node_type=NodeType.CHAPTER,
-                title=section.get("title", f"Section {section_idx+1}"),
-                position=section_idx,
-                raw_fragment_ids=[section["raw_fragment_id"]] if section.get("raw_fragment_id") else [],
-                metadata={"moodle_section_id": section.get("section_id")},
-            )
-            content_nodes.append(chapter_node)
-
-            seq_node = ContentNode(
-                node_id=str(uuid.uuid4()),
-                node_type=NodeType.SEQUENTIAL,
-                title="Content",
-                parent_id=chapter_node.node_id,
+                node_type=NodeType.HTML,
+                title=act.get("title"),
+                parent_id=parent.node_id,
                 position=0,
+                metadata={"content_html": content_html},
             )
-            chapter_node.children.append(seq_node)
 
-            for act_idx, act in enumerate(section.get("activities", [])):
-                vert_node = ContentNode(
+        if module == "quiz" or node_type_str == "quiz":
+            return ContentNode(
+                node_id=str(uuid.uuid4()),
+                node_type=NodeType.PROBLEM,
+                title=act.get("title"),
+                parent_id=parent.node_id,
+                position=0,
+                assessment_id=assessment_id,
+                metadata={"content_html": content_html},
+            )
+
+        if module == "forum" or node_type_str == "forum":
+            return ContentNode(
+                node_id=str(uuid.uuid4()),
+                node_type=NodeType.FORUM,
+                title=act.get("title"),
+                parent_id=parent.node_id,
+                position=0,
+                metadata={"content_html": content_html},
+            )
+
+        if module == "workshop" or node_type_str == "openassessment":
+            metadata.setdefault("activity_type", "workshop")
+            metadata["content_html"] = content_html
+            return ContentNode(
+                node_id=str(uuid.uuid4()),
+                node_type=NodeType.OPENASSESSMENT,
+                title=act.get("title"),
+                parent_id=parent.node_id,
+                position=0,
+                metadata=metadata,
+            )
+
+        if node_type_str == "video":
+            return ContentNode(
+                node_id=str(uuid.uuid4()),
+                node_type=NodeType.VIDEO,
+                title=act.get("title"),
+                parent_id=parent.node_id,
+                position=0,
+                metadata=metadata,
+            )
+
+        if node_type_str == "scorm" or module == "scorm":
+            return ContentNode(
+                node_id=str(uuid.uuid4()),
+                node_type=NodeType.SCORM,
+                title=act.get("title"),
+                parent_id=parent.node_id,
+                position=0,
+                metadata=metadata,
+            )
+
+        if node_type_str == "activity" or module == "url":
+            url = metadata.get("externalurl", "")
+            link = f'<p><a href="{url}">{url}</a></p>' if url else ""
+            if metadata.get("asset_id") or module in ("resource", "url"):
+                metadata["content_html"] = content_html or link
+                return ContentNode(
                     node_id=str(uuid.uuid4()),
-                    node_type=NodeType.VERTICAL,
-                    title=act.get("title", f"Activity {act_idx+1}"),
-                    parent_id=seq_node.node_id,
-                    position=act_idx,
-                    raw_fragment_ids=[act["raw_fragment_id"]] if act.get("raw_fragment_id") else [],
-                    metadata={"moodle_cmid": act.get("cmid")},
+                    node_type=NodeType.ACTIVITY,
+                    title=act.get("title"),
+                    parent_id=parent.node_id,
+                    position=0,
+                    metadata=metadata,
                 )
-                seq_node.children.append(vert_node)
+            return ContentNode(
+                node_id=str(uuid.uuid4()),
+                node_type=NodeType.HTML,
+                title=act.get("title"),
+                parent_id=parent.node_id,
+                position=0,
+                metadata={
+                    "content_html": content_html or link,
+                    "externalurl": url,
+                },
+            )
 
-                module = act.get("module_name", "")
-                node_type_str = act.get("node_type", "")
-                content_html = act.get("content_html", "")
-                assessment_id = act.get("assessment_id")
+        if node_type_str == "lti" or module == "lti":
+            return ContentNode(
+                node_id=str(uuid.uuid4()),
+                node_type=NodeType.LTI,
+                title=act.get("title"),
+                parent_id=parent.node_id,
+                position=0,
+                metadata=metadata,
+            )
 
-                if module in ("page", "label") or node_type_str in ("page", "html"):
-                    comp = ContentNode(
-                        node_id=str(uuid.uuid4()),
-                        node_type=NodeType.HTML,
-                        title=act.get("title"),
-                        parent_id=vert_node.node_id,
-                        position=0,
-                        metadata={"content_html": content_html},
-                    )
-                    vert_node.children.append(comp)
-                elif module == "quiz" or node_type_str == "quiz":
-                    comp = ContentNode(
-                        node_id=str(uuid.uuid4()),
-                        node_type=NodeType.PROBLEM,
-                        title=act.get("title"),
-                        parent_id=vert_node.node_id,
-                        position=0,
-                        assessment_id=assessment_id,
-                    )
-                    vert_node.children.append(comp)
-
-                elif module == "forum" or node_type_str == "forum":
-                    comp = ContentNode(
-                        node_id=str(uuid.uuid4()),
-                        node_type=NodeType.FORUM,
-                        title=act.get("title"),
-                        parent_id=vert_node.node_id,
-                        position=0,
-                        metadata={"content_html": act.get("content_html", "")},
-                    )
-                    vert_node.children.append(comp)
-
-                elif node_type_str == "openassessment":
-                    comp = ContentNode(
-                        node_id=str(uuid.uuid4()),
-                        node_type=NodeType.OPENASSESSMENT,
-                        title=act.get("title"),
-                        parent_id=vert_node.node_id,
-                        position=0,
-                        metadata={"content_html": act.get("content_html", ""), "activity_type": "workshop"},
-                    )
-                    vert_node.children.append(comp)
-
-                elif node_type_str == "video":
-                    comp = ContentNode(
-                        node_id=str(uuid.uuid4()),
-                        node_type=NodeType.VIDEO,
-                        title=act.get("title"),
-                        parent_id=vert_node.node_id,
-                        position=0,
-                        metadata=act.get("metadata", {}),
-                    )
-                    vert_node.children.append(comp)
-                else:
-                    # Unsupported activity -> HTML placeholder
-                    comp = ContentNode(
-                        node_id=str(uuid.uuid4()),
-                        node_type=NodeType.HTML,
-                        title=act.get("title", "Unknown"),
-                        parent_id=vert_node.node_id,
-                        position=0,
-                        metadata={"content_html": f"<p>Unsupported activity: {module}</p>"},
-                    )
-                    vert_node.children.append(comp)
-
-        for a in parsed.get("assets", []):
-            assets.append(Asset(
-                asset_id=a["asset_id"],
-                course_id=parsed.get("course_id") or job_id,
-                path=a.get("path", ""),
-                mime_type=a.get("mime_type"),
-                checksum=a.get("checksum"),
-            ))
-
-        return Course(
-            course_id=parsed.get("course_id") or job_id,
-            title=parsed.get("course_title", "Unnamed Course"),
-            source_system=SourceSystem.MOODLE,
-            content_nodes=content_nodes,
-            assessments=assessments,
-            questions=questions,
-            answer_options=answer_options,
-            assets=assets,
-            raw_fragments=raw_fragments,
-            metadata={
-                "shortname": parsed.get("course_shortname"),
-                "lang": parsed.get("lang"),
-            },
+        return ContentNode(
+            node_id=str(uuid.uuid4()),
+            node_type=NodeType.HTML,
+            title=act.get("title", "Unknown"),
+            parent_id=parent.node_id,
+            position=0,
+            metadata={"content_html": f"<p>Unsupported activity: {module}</p>"},
         )
+
+    def _asset_from_dict(self, asset_data: Dict[str, Any], course_id: str) -> Asset:
+        common = {
+            "asset_id": asset_data["asset_id"],
+            "course_id": course_id,
+            "path": asset_data.get("path", ""),
+            "mime_type": asset_data.get("mime_type"),
+            "checksum": asset_data.get("checksum"),
+            "metadata": {
+                key: value
+                for key, value in asset_data.items()
+                if key
+                not in {
+                    "asset_id",
+                    "course_id",
+                    "path",
+                    "mime_type",
+                    "checksum",
+                    "original_zip_path",
+                    "version",
+                }
+            },
+        }
+
+        if asset_data.get("is_scorm") or asset_data.get("original_zip_path"):
+            return ScormAsset(
+                **common,
+                original_zip_path=asset_data.get("original_zip_path")
+                or asset_data.get("path", ""),
+                version=asset_data.get("version", ""),
+            )
+        return Asset(**common)
+
+    def _normalise_question_type(self, question_type: str) -> str:
+        mapping = {
+            "single-select": "multichoice",
+            "multi-select": "multiselect",
+            "text_input": "shortanswer",
+        }
+        return mapping.get(question_type, question_type)

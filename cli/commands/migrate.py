@@ -214,12 +214,20 @@ def _perform_migration(course: Any, target: str, output: str, result: dict) -> s
         if target == "openedx":
             typer.echo("Converting to Open edX format...")
             output_path = migrator.migrate_to_openedx(
-                course, output, source_extracted_path=result.get("extracted_path")
+                course,
+                output,
+                source_extracted_path=result.get("extracted_path"),
+                job_id=result.get("job_id"),
+                report=result.get("report", []),
             )
         elif target == "moodle":
             typer.echo("Converting to Moodle format...")
             output_path = migrator.migrate_to_moodle(
-                course, output, source_extracted_path=result.get("extracted_path")
+                course,
+                output,
+                source_extracted_path=result.get("extracted_path"),
+                job_id=result.get("job_id"),
+                report=result.get("report", []),
             )
         else:
             logger.error("Unsupported target: %s", target)

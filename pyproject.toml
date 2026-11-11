@@ -23,5 +23,9 @@ dev = [
 [tool.setuptools]
 packages = ["cli", "core", "data", "domain", "adapters", "persistence"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
 [project.scripts]
 lms-converter = "cli.main:app"

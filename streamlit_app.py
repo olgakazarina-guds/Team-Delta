@@ -7,7 +7,7 @@ from core.ingest import IngestService
 from core.migrate import MigrationService
 from domain.entities import Course
 from domain.enums import NodeType
-from persistence.repositories import get_job, save_job, save_migration_job, init_db
+from persistence.repositories import get_job, init_db
 
 # Page setup
 st.set_page_config(page_title="LMS Converter", layout="wide")
@@ -386,6 +386,8 @@ def run_migration():
 
     course = inspection["course"]
     extracted_path = inspection.get("extracted_path")
+    job_id = inspection.get("job_id")
+    report = inspection.get("report", [])
 
     migrator = MigrationService()
     try:
@@ -393,22 +395,34 @@ def run_migration():
         output_dir.mkdir(parents=True, exist_ok=True)
         if target_lms == "openedx":
             with st.spinner("Converting to Open edX format..."):
-                output_file = migrator.migrate_to_openedx(course, output_path, source_extracted_path=extracted_path)
+                output_file = migrator.migrate_to_openedx(
+                    course,
+                    output_path,
+                    source_extracted_path=extracted_path,
+                    job_id=job_id,
+                    report=report,
+                )
         elif target_lms == "moodle":
             with st.spinner("Converting to Moodle format..."):
-                output_file = migrator.migrate_to_moodle(course, output_path, source_extracted_path=extracted_path)
-
+                output_file = migrator.migrate_to_moodle(
+                    course,
+                    output_path,
+                    source_extracted_path=extracted_path,
+                    job_id=job_id,
+                    report=report,
+                )
         else:
             st.error(f"Unsupported target: {target_lms}")
             return
+
         st.success("Migration completed!")
         st.write(f"Output file saved to: **{output_file}**")
-        st.session_state.migration_job_id = course.course_id if hasattr(course, "course_id") else course.get("course_id")
-        st.info(f"Job ID: {st.session_state.migration_job_id}")
+        st.session_state.migration_job_id = job_id
+        st.info(f"Job ID: {job_id}")
         # Save migration report
         reports_dir = Path("data/reports")
         reports_dir.mkdir(parents=True, exist_ok=True)
-        migration_json_path = reports_dir / f"migration_{st.session_state.migration_job_id}.json"
+        migration_json_path = reports_dir / f"migration_{job_id}.json"
         serializable_course = make_serializable(course)
         with open(migration_json_path, "w", encoding="utf-8") as f:
             json.dump({
@@ -420,15 +434,6 @@ def run_migration():
         st.info(f"Migration report saved to: {migration_json_path}")
     except Exception as e:
         st.error(f"Migration failed: {e}")
-
-    save_migration_job(
-        st.session_state.migration_job_id,
-        course.source_system.value if hasattr(course.source_system, 'value') else str(course.source_system),
-        target_lms,
-        course,
-        [],
-        extracted_path
-    )
 
 @st.dialog("Migrate Course")
 def migrate_dialog():
@@ -479,10 +484,8 @@ with col_migrate:
 # Run migration after dialog closes
 if st.session_state.get("target_lms") is not None:
     run_migration()
-    del st.session_state.target_lms
-    del st.session_state.output_filename
-    del st.session_state.output_directory
-    del st.session_state.detailed
+    for key in ("target_lms", "output_filename", "output_directory", "detailed"):
+        st.session_state.pop(key, None)
 
 # Render inspection result if available
 if st.session_state.inspection_result:
