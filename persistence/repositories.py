@@ -9,13 +9,12 @@ migrated, and failed jobs.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-DB_PATH = Path(os.environ.get("LMS_CONVERTER_DB", "data/lms_converter.db"))
+from core.config import get_settings
 
 _REQUIRED_COLUMNS = {
     "status": "TEXT NOT NULL DEFAULT 'inspected'",
@@ -25,10 +24,15 @@ _REQUIRED_COLUMNS = {
 }
 
 
+def _database_path() -> Path:
+    """Resolve the database path at call time so configuration is never stale."""
+    return get_settings().db_path
+
+
 @contextmanager
 def _connect() -> Iterator[sqlite3.Connection]:
     """Open a configured connection and always close it."""
-    path = Path(DB_PATH)
+    path = _database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row

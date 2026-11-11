@@ -1,14 +1,17 @@
 import json
-import tempfile
+import uuid
 import streamlit as st
-import os
 from pathlib import Path
+from core.config import get_settings
 from core.ingest import IngestService
 from core.migrate import MigrationService
 from core.report import render_html_report
 from domain.entities import Course
 from domain.enums import NodeType
 from persistence.repositories import get_job, init_db
+
+settings = get_settings()
+settings.ensure_directories()
 
 # Page setup
 st.set_page_config(page_title="LMS Converter", layout="wide")
@@ -27,7 +30,7 @@ if "report_job" not in st.session_state:
 if "report_format" not in st.session_state:
     st.session_state.report_format = None
 if "output_directory" not in st.session_state:
-    st.session_state.output_directory = str(Path.home())
+    st.session_state.output_directory = str(settings.output_dir)
 if "show_report_dialog" not in st.session_state:
     st.session_state.show_report_dialog = False
 
@@ -279,19 +282,27 @@ else:
 
 st.caption(f"Detected source LMS: **{source_lms.upper()}**")
 
-# Save upload to temporary file
+# Save upload under the configured upload directory
+upload_bytes = uploaded_file.getvalue()
+if len(upload_bytes) > settings.max_upload_bytes:
+    st.error(
+        f"Upload is {len(upload_bytes)} bytes; the limit is "
+        f"{settings.max_upload_bytes} bytes."
+    )
+    st.stop()
+
 suffix = ".tar.gz" if uploaded_file.name.endswith(".tar.gz") else f".{uploaded_file.name.split('.')[-1]}"
-with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-    tmp_file.write(uploaded_file.getvalue())
-    tmp_path = tmp_file.name
+upload_path = settings.upload_dir / f"{uuid.uuid4().hex}{suffix}"
+upload_path.write_bytes(upload_bytes)
+tmp_path = str(upload_path)
 
 # Migration dialog
 def run_migration():
     target_lms = st.session_state.get("target_lms", "openedx")
     output_filename = st.session_state.get("output_filename", "export.tar.gz")
-    output_directory = st.session_state.get("output_directory", str(Path.home()))
+    output_directory = st.session_state.get("output_directory", str(settings.output_dir))
     detailed = st.session_state.get("detailed", False)
-    output_path = os.path.join(output_directory, output_filename)
+    output_path = str(Path(output_directory) / output_filename)
     inspection = st.session_state.inspection_result
     if not inspection:
         st.error("No inspection result available. Please inspect first.")
@@ -333,7 +344,7 @@ def run_migration():
         st.session_state.migration_job_id = job_id
         st.info(f"Job ID: {job_id}")
         # Save migration report
-        reports_dir = Path("data/reports")
+        reports_dir = settings.report_dir
         reports_dir.mkdir(parents=True, exist_ok=True)
         migration_json_path = reports_dir / f"migration_{job_id}.json"
         serializable_course = make_serializable(course)
@@ -356,7 +367,7 @@ def migrate_dialog():
     output_filename = st.text_input("Output filename", value=default_filename, key="dialog_output_filename",
                                     help="Name of the output file (e.g., export.tar.gz)")
     st.markdown("### Output Directory")
-    current_dir = st.session_state.get("output_directory", str(Path.home()))
+    current_dir = st.session_state.get("output_directory", str(settings.output_dir))
     output_directory = st.text_input("Directory path", value=current_dir, key="dialog_output_directory",
                                      help="Full directory path where the file will be saved")
     if output_directory:
@@ -379,7 +390,7 @@ with col_inspect:
         with st.spinner("Inspecting course..."):
             try:
                 service = IngestService()
-                result = service.inspect(tmp_path, source_type=source_lms, work_dir="data/extracted")
+                result = service.inspect(tmp_path, source_type=source_lms)
                 st.session_state.inspection_result = result
                 st.session_state.inspection_path = tmp_path
                 st.success("Inspection complete!")

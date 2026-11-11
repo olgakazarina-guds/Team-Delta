@@ -50,6 +50,19 @@ def _safe_member_path(base: Path, name: str) -> Path:
     return destination
 
 
+def _configured_limits() -> ExtractionLimits:
+    """Build limits from the central settings object."""
+    from core.config import get_settings
+
+    settings = get_settings()
+    return ExtractionLimits(
+        max_entries=settings.max_extract_members,
+        max_total_bytes=settings.max_extract_bytes,
+        max_member_bytes=settings.max_extract_member_bytes,
+        max_compression_ratio=settings.max_compression_ratio,
+    )
+
+
 def _check_ratio(
     *,
     name: str,
@@ -75,7 +88,7 @@ def safe_extract_tar(
     limits: ExtractionLimits | None = None,
 ) -> None:
     """Extract a tar archive after validating every member and global budget."""
-    cfg = limits or ExtractionLimits()
+    cfg = limits or _configured_limits()
     target = Path(target_dir)
     target.mkdir(parents=True, exist_ok=True)
     archive_size = Path(archive_path).stat().st_size
@@ -129,7 +142,7 @@ def safe_extract_zip(
     limits: ExtractionLimits | None = None,
 ) -> None:
     """Extract a zip archive after validating members, links, and size budgets."""
-    cfg = limits or ExtractionLimits()
+    cfg = limits or _configured_limits()
     target = Path(target_dir)
     target.mkdir(parents=True, exist_ok=True)
 

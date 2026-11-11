@@ -6,6 +6,17 @@ from pathlib import Path
 
 import pytest
 
+from core.config import reset_settings
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings(tmp_path: Path, monkeypatch):
+    """Keep every test out of the repository's data directory."""
+    monkeypatch.setenv("LMS_CONVERTER_DATA_DIR", str(tmp_path / "data"))
+    reset_settings()
+    yield
+    reset_settings()
+
 
 def _write_tree(root: Path, files: dict[str, str | bytes]) -> None:
     for relative, content in files.items():

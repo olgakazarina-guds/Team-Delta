@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.archive_utils import resolve_under
+from core.config import get_settings
 from domain.entities import AnswerOption, Asset, ContentNode, Course, Question
 from domain.enums import NodeType
 
@@ -22,7 +23,10 @@ BACKUP_RELEASE = "4.5"
 class MoodleTargetAdapter:
     """Generate a Moodle backup archive from a canonical Course."""
 
-    def __init__(self):
+    def __init__(self, work_dir: str | Path | None = None):
+        self.work_root = (
+            Path(work_dir) if work_dir is not None else get_settings().work_dir
+        )
         self.work_dir: Optional[Path] = None
         self.course: Optional[Course] = None
         self._next_id = 1
@@ -46,7 +50,7 @@ class MoodleTargetAdapter:
         """Generate a Moodle .mbz backup from a canonical Course."""
         self._reset_state()
         self.course = course
-        self.work_dir = Path("data/moodle_backup") / uuid.uuid4().hex
+        self.work_dir = self.work_root / "moodle" / uuid.uuid4().hex
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
         for subdir in ("course", "sections", "activities", "files"):

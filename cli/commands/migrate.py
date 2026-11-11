@@ -77,7 +77,6 @@ def migrate_command(
             result = ingest.inspect(
                 source_path,
                 source_type=source,
-                work_dir="data/extracted",
                 target_type=target,
             )
 

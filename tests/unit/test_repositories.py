@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from domain.entities import Course, MappingNote
 from domain.enums import Severity, SourceSystem
 from persistence import repositories
 
 
-def test_migration_job_preserves_report(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(repositories, "DB_PATH", tmp_path / "jobs.db")
+def test_migration_job_preserves_report():
     course = Course(course_id="course-1", title="Course", source_system=SourceSystem.OPENEDX)
     report = [
         MappingNote(
@@ -30,8 +27,7 @@ def test_migration_job_preserves_report(tmp_path: Path, monkeypatch):
     assert "keep me" in job["report_json"]
 
 
-def test_job_lifecycle_fields_are_persisted(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(repositories, "DB_PATH", tmp_path / "jobs.db")
+def test_job_lifecycle_fields_are_persisted():
     course = Course(course_id="course-life", title="Life", source_system=SourceSystem.OPENEDX)
     repositories.save_job("job-life", "openedx", "moodle", course, [], "/tmp/x")
 

@@ -8,29 +8,19 @@ use the standard-library ElementTree because output is application-controlled.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Final
 
 from defusedxml import ElementTree as DefusedElementTree
 from defusedxml.common import DefusedXmlException
 from xml.etree.ElementTree import Element, ParseError
 
+from core.config import get_settings
 from core.errors import XmlSecurityError
-
-DEFAULT_MAX_XML_BYTES: Final[int] = 64 * 1024 * 1024
 
 
 def _max_bytes() -> int:
-    """Allow deployments to lower/raise the XML limit without code changes."""
-    raw = os.environ.get("LMS_CONVERTER_MAX_XML_BYTES")
-    if not raw:
-        return DEFAULT_MAX_XML_BYTES
-    try:
-        value = int(raw)
-    except ValueError:
-        return DEFAULT_MAX_XML_BYTES
-    return value if value > 0 else DEFAULT_MAX_XML_BYTES
+    """Resolve the configured XML limit without importing config at module load."""
+    return get_settings().max_xml_bytes
 
 
 def parse_xml_bytes(

@@ -9,6 +9,9 @@ The format follows Keep a Changelog, and the project intends to use semantic ver
 ### Added
 
 - Apache-2.0 license.
+- Central environment-driven configuration for paths, upload limits, archive limits, XML limits, environment, and auth mode.
+- Installable wheel with all adapter, CLI, core, domain, and persistence packages.
+- Optional `ui` extra for Streamlit and a `--version` CLI flag.
 - Deterministic canonical identifiers derived from stable source keys.
 - Archive extraction limits and path-containment checks.
 - Defused XML parsing with configurable size limits.

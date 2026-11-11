@@ -82,7 +82,6 @@ def inspect_command(
             result = service.inspect(
                 path,
                 source_type=source,
-                work_dir="data/extracted",
                 target_type=validate_for,
             )
 

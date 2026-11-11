@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import Dict, Any, List, Optional
 
 from core.archive_utils import resolve_under
+from core.config import get_settings
 from domain.entities import Course, ContentNode, Assessment, Question, AnswerOption, Asset, RawFragment, MappingNote
 from domain.enums import SourceSystem, NodeType, AssessmentType, Severity
 
@@ -36,8 +37,11 @@ class OpenEdxTargetAdapter:
         node_id_map: Mapping from node_id to url_name for XML references
     """
 
-    def __init__(self):
+    def __init__(self, work_dir: str | Path | None = None):
         """Initialize the adapter with empty state."""
+        self.work_root = (
+            Path(work_dir) if work_dir is not None else get_settings().work_dir
+        )
         self.work_dir: Optional[Path] = None
         self.course: Optional[Course] = None
         self.node_id_map: Dict[str, str] = {}
@@ -72,7 +76,7 @@ class OpenEdxTargetAdapter:
         self.course = course
         self.node_id_map = {}
         self.asset_paths = self._build_asset_paths()
-        self.work_dir = Path("data/openedx_export") / uuid.uuid4().hex
+        self.work_dir = self.work_root / "openedx" / uuid.uuid4().hex
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
         # Step 2: Create Open edX directory structure
