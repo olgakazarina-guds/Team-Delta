@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from core.ingest import IngestService
 from core.migrate import MigrationService
+from core.report import render_html_report
 from domain.entities import Course
 from domain.enums import NodeType
 from persistence.repositories import get_job, init_db
@@ -40,97 +41,9 @@ def count_node_type(nodes, target_type):
     return count
 
 def generate_html_report(job_id, job, course, report_items):
-    chapters = count_node_type(course.content_nodes, "chapter")
-    sequentials = count_node_type(course.content_nodes, "sequential")
-    verticals = count_node_type(course.content_nodes, "vertical")
-    html_components = count_node_type(course.content_nodes, "html")
-    problem_components = count_node_type(course.content_nodes, "problem")
-    video_components = count_node_type(course.content_nodes, "video")
+    """Delegate to the escaped, shared report renderer."""
+    return render_html_report(job_id, job, course, report_items)
 
-    unsupported_types = set()
-    for note in report_items:
-        if note.get("code") == "UNSUPPORTED_NODES":
-            unsupported_types.add(note.get("message", ""))
-        elif note.get("code") == "UNSUPPORTED_QUESTION_TYPE":
-            unsupported_types.add("question_type")
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>LMS Converter Report - {job_id}</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; margin: 2rem; }}
-        h1, h2 {{ color: #2c3e50; }}
-        table {{ border-collapse: collapse; width: 100%; margin: 1rem 0; }}
-        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-        th {{ background-color: #f2f2f2; }}
-        .warning {{ background-color: #fff3cd; }}
-        .error {{ background-color: #f8d7da; }}
-        .info {{ background-color: #d1ecf1; }}
-        .summary {{ background-color: #e9ecef; }}
-    </style>
-</head>
-<body>
-    <h1>LMS Converter Report</h1>
-    <p><strong>Job ID:</strong> {job_id}</p>
-    <p><strong>Created:</strong> {job['created_at']}</p>
-    <p><strong>Source LMS:</strong> {job['source_type']}</p>
-    <p><strong>Target LMS:</strong> {job['target_type'] or 'N/A'}</p>
-    <h2>Course Summary</h2>
-    <table class="summary">
-        <tr><th>Property</th><th>Value</th></tr>
-        <tr><td>Title</td><td>{course.title}</td></tr>
-        <tr><td>Content Nodes</td><td>{len(course.content_nodes)}</td></tr>
-        <tr><td>Chapters</td><td>{chapters}</td></tr>
-        <tr><td>Sequentials</td><td>{sequentials}</td></tr>
-        <tr><td>Verticals</td><td>{verticals}</td></tr>
-        <tr><td>HTML Components</td><td>{html_components}</td></tr>
-        <tr><td>Problem Components</td><td>{problem_components}</td></tr>
-        <tr><td>Video Components</td><td>{video_components}</td></tr>
-        <tr><td>Assessments</td><td>{len(course.assessments)}</td></tr>
-        <tr><td>Questions</td><td>{len(course.questions)}</td></tr>
-        <tr><td>Answer Options</td><td>{len(course.answer_options)}</td></tr>
-        <tr><td>Assets</td><td>{len(course.assets)}</td></tr>
-    </table>
-"""
-    if course.assets:
-        html += """    <h2>Assets</h2>
-    <table>
-        <tr><th>Asset ID</th><th>Path</th></tr>
-"""
-        for a in course.assets[:20]:
-            html += f"""        <tr><td>{a.asset_id}</td><td>{a.path}</td></tr>
-"""
-        if len(course.assets) > 20:
-            html += f"""        <tr><td colspan="2">... and {len(course.assets)-20} more</td></tr>
-"""
-        html += "    </table>\n"
-
-    if unsupported_types:
-        html += """    <h2>Unsupported Features</h2>
-    <ul>
-"""
-        for u in unsupported_types:
-            html += f"        <li>{u}</li>\n"
-        html += "    </ul>\n"
-
-    html += """    <h2>Validation Warnings & Errors</h2>
-    <table>
-        <tr><th>Severity</th><th>Code</th><th>Message</th></tr>
-"""
-    for note in report_items:
-        severity = note.get("severity", "info")
-        css_class = {"warning": "warning", "error": "error", "info": "info"}.get(severity, "")
-        html += f"""        <tr class="{css_class}">
-            <td>{severity}</td>
-            <td>{note.get('code', '')}</td>
-            <td>{note.get('message', '')}</td>
-        </tr>
-"""
-    html += """    </table>
-</body>
-</html>"""
-    return html
 
 # Utility: convert objects to JSON-serializable
 def make_serializable(obj):

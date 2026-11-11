@@ -44,6 +44,7 @@ class MoodleTargetAdapter:
         source_extracted_path: Optional[str] = None,
     ) -> str:
         """Generate a Moodle .mbz backup from a canonical Course."""
+        self._reset_state()
         self.course = course
         self.work_dir = Path("data/moodle_backup") / uuid.uuid4().hex
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -66,6 +67,22 @@ class MoodleTargetAdapter:
         with tarfile.open(output_path, "w:gz") as tar:
             tar.add(self.work_dir, arcname=".")
         return str(output_path)
+
+    def _reset_state(self) -> None:
+        """Clear all per-export state so one adapter instance is reusable."""
+        self.work_dir = None
+        self.course = None
+        self._next_id = 1
+        self.course_id = 1
+        self.section_records = []
+        self.activity_records = []
+        self.file_records = []
+        self.asset_file_ids = {}
+        self.question_ids = {}
+        self.question_categories = {}
+        self.quiz_module_ids = {}
+        self._current_module_id = 0
+        self._current_module_name = ""
 
     def _new_id(self) -> int:
         value = self._next_id
@@ -112,7 +129,7 @@ class MoodleTargetAdapter:
 
     def _write_sections_and_activities(self) -> None:
         section_number = 0
-        for chapter in self.course.content_nodes:
+        for chapter in sorted(self.course.content_nodes, key=lambda n: n.position):
             if chapter.node_type != NodeType.CHAPTER:
                 continue
             section_number += 1
@@ -136,12 +153,12 @@ class MoodleTargetAdapter:
 
     def _collect_activities(self, chapter: ContentNode) -> List[ContentNode]:
         activities = []
-        for seq in chapter.children:
+        for seq in sorted(chapter.children, key=lambda n: n.position):
             if seq.node_type != NodeType.SEQUENTIAL:
                 continue
-            for vert in seq.children:
+            for vert in sorted(seq.children, key=lambda n: n.position):
                 if vert.node_type == NodeType.VERTICAL:
-                    activities.extend(vert.children)
+                    activities.extend(sorted(vert.children, key=lambda n: n.position))
         return activities
 
     def _write_section_xml(
@@ -206,6 +223,8 @@ class MoodleTargetAdapter:
 
     def _map_module_name(self, comp: ContentNode) -> str:
         if comp.node_type in (NodeType.HTML, NodeType.PAGE):
+            if comp.metadata.get("moodle_module") == "page":
+                return "page"
             content = comp.metadata.get("content_html", "")
             return "page" if len(content) > 200 else "label"
         if comp.node_type == NodeType.PROBLEM:
@@ -235,7 +254,7 @@ class MoodleTargetAdapter:
         root = ET.Element("module", id=str(module_id), version=MOODLE_VERSION)
         ET.SubElement(root, "modulename").text = module_name
         ET.SubElement(root, "sectionid").text = str(section_id)
-        ET.SubElement(root, "sectionnumber").text = str(section_number)
+        ET.SubElement(root, "sectionnumber").text = str(section_number - 1)
         ET.SubElement(root, "idnumber").text = ""
         ET.SubElement(root, "added").text = str(int(time.time()))
         ET.SubElement(root, "score").text = "0"
@@ -256,9 +275,10 @@ class MoodleTargetAdapter:
 
     def _write_page_xml(self, act_dir: Path, comp: ContentNode) -> None:
         content = comp.metadata.get("content_html", "")
+        intro = comp.metadata.get("intro_html", "")
         root = ET.Element("page", id=str(self._new_id()))
         ET.SubElement(root, "name").text = comp.title or "Page"
-        ET.SubElement(root, "intro").text = content
+        ET.SubElement(root, "intro").text = intro
         ET.SubElement(root, "introformat").text = "1"
         ET.SubElement(root, "content").text = content
         ET.SubElement(root, "contentformat").text = "1"
@@ -451,10 +471,12 @@ class MoodleTargetAdapter:
                 continue
             self.question_categories[assessment.assessment_id] = self._new_id()
             for question in questions:
-                self.question_ids[question.question_id] = self._new_id()
+                if question.question_id not in self.question_ids:
+                    self.question_ids[question.question_id] = self._new_id()
 
     def _write_questions_xml(self) -> None:
         root = ET.Element("question_categories")
+        written_question_ids: set[str] = set()
         for assessment in self.course.assessments:
             category_id = self.question_categories.get(assessment.assessment_id)
             if category_id is None:
@@ -480,8 +502,9 @@ class MoodleTargetAdapter:
             questions_elem = ET.SubElement(category, "questions")
             for question in questions:
                 numeric_id = self.question_ids.get(question.question_id)
-                if numeric_id is None:
+                if numeric_id is None or question.question_id in written_question_ids:
                     continue
+                written_question_ids.add(question.question_id)
                 self._write_single_question(questions_elem, question, numeric_id)
 
         self._write_xml(self.work_dir / "questions.xml", root)
@@ -569,13 +592,34 @@ class MoodleTargetAdapter:
                         is_correct=False,
                     ),
                 ]
+            true_option = next(
+                (o for o in options if o.text.strip().lower() == "true"), None
+            )
+            false_option = next(
+                (o for o in options if o.text.strip().lower() == "false"), None
+            )
+            if true_option is None:
+                true_option = AnswerOption(
+                    option_id=f"{question.question_id}-true",
+                    question_id=question.question_id,
+                    text="True",
+                    is_correct=not any(o.is_correct for o in options),
+                )
+            if false_option is None:
+                false_option = AnswerOption(
+                    option_id=f"{question.question_id}-false",
+                    question_id=question.question_id,
+                    text="False",
+                    is_correct=not any(o.is_correct for o in options),
+                )
             true_id = self._new_id()
             false_id = self._new_id()
-            for index, option in enumerate(options[:2]):
-                answer_id = true_id if index == 0 else false_id
-                self._write_moodle_answer(
-                    answers_elem, answer_id, option.text, option.is_correct
-                )
+            self._write_moodle_answer(
+                answers_elem, true_id, true_option.text, true_option.is_correct
+            )
+            self._write_moodle_answer(
+                answers_elem, false_id, false_option.text, false_option.is_correct
+            )
             truefalse = ET.SubElement(plugin, "truefalse", id=str(self._new_id()))
             ET.SubElement(truefalse, "trueanswer").text = str(true_id)
             ET.SubElement(truefalse, "falseanswer").text = str(false_id)

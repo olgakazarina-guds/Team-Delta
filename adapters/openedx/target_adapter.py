@@ -14,7 +14,7 @@ import os
 import tarfile
 import uuid
 import xml.etree.ElementTree as ET
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, Any, List, Optional
 
 from core.archive_utils import resolve_under
@@ -70,6 +70,7 @@ class OpenEdxTargetAdapter:
         """
         # Step 1: Initialize working directory and course state
         self.course = course
+        self.node_id_map = {}
         self.asset_paths = self._build_asset_paths()
         self.work_dir = Path("data/openedx_export") / uuid.uuid4().hex
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -86,7 +87,7 @@ class OpenEdxTargetAdapter:
         self._write_policies()
 
         # Step 5: Process content nodes and generate XML for each hierarchy level
-        for node in course.content_nodes:
+        for node in sorted(course.content_nodes, key=lambda n: n.position):
             if node.node_type == NodeType.CHAPTER:
                 self._write_chapter(node)
 
@@ -98,7 +99,9 @@ class OpenEdxTargetAdapter:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(output_path, "w:gz") as tar:
-            tar.add(self.work_dir, arcname="course")
+            # Open edX expects course.xml at the archive root, not under an
+            # extra wrapper directory.
+            tar.add(self.work_dir, arcname=".")
         return str(output_path)
 
     def _safe_name(self, name: str, max_len: int = 32) -> str:
@@ -133,21 +136,49 @@ class OpenEdxTargetAdapter:
             safe = safe[: 120 - len(suffix)] + suffix
         return safe
 
+    def _safe_asset_relative_path(self, asset: Asset) -> str:
+        """Return a safe path relative to ``static/``.
+
+        Open edX HTML commonly references nested paths such as
+        ``/static/sub/img.png``.  Flattening every asset to its basename breaks
+        those references, so native ``static/`` paths are preserved segment by
+        segment.  Other source layouts (for example Moodle's content-addressed
+        ``files/`` store) use the original filename.
+        """
+        raw_path = asset.path.replace("\\", "/")
+        if raw_path.startswith("static/"):
+            relative = raw_path[len("static/"):]
+            parts = []
+            for part in PurePosixPath(relative).parts:
+                if part in ("", "."):
+                    continue
+                if part == "..":
+                    return self._safe_asset_filename(asset)
+                safe = "".join(c for c in part if c.isalnum() or c in "._-")
+                parts.append(safe or "asset")
+            if parts:
+                return "/".join(parts)
+        return self._safe_asset_filename(asset)
+
     def _build_asset_paths(self) -> Dict[str, str]:
-        """Map asset IDs to unique filenames under the export's static folder."""
+        """Map asset IDs to unique relative paths under the export's static folder."""
         paths: Dict[str, str] = {}
         used: set[str] = set()
         for asset in self.course.assets:
-            name = self._safe_asset_filename(asset)
+            name = self._safe_asset_relative_path(asset)
             if name in used:
-                name = f"{asset.asset_id[:8]}_{name}"
+                parent, _, filename = name.rpartition("/")
+                filename = f"{asset.asset_id[:8]}_{filename or name}"
+                name = f"{parent}/{filename}" if parent else filename
             used.add(name)
             paths[asset.asset_id] = name
         return paths
 
     def _asset_static_path(self, asset: Asset) -> str:
         """Return the static URL path for an asset."""
-        return self.asset_paths.get(asset.asset_id, self._safe_asset_filename(asset))
+        return self.asset_paths.get(
+            asset.asset_id, self._safe_asset_relative_path(asset)
+        )
 
     def _get_url_name(self, node_id: str) -> str:
         """
@@ -265,7 +296,7 @@ class OpenEdxTargetAdapter:
         root = ET.Element("chapter")
         root.set("display_name", node.title or "Chapter")
         
-        for child in node.children:
+        for child in sorted(node.children, key=lambda n: n.position):
             if child.node_type == NodeType.SEQUENTIAL:
                 seq = ET.SubElement(root, "sequential")
                 seq.set("url_name", self._get_url_name(child.node_id))
@@ -273,7 +304,7 @@ class OpenEdxTargetAdapter:
         self._write_xml(self.work_dir / "chapter" / f"{url_name}.xml", root)
         
         # Recursively process sequential children
-        for child in node.children:
+        for child in sorted(node.children, key=lambda n: n.position):
             if child.node_type == NodeType.SEQUENTIAL:
                 self._write_sequential(child)
 
@@ -292,7 +323,7 @@ class OpenEdxTargetAdapter:
         root = ET.Element("sequential")
         root.set("display_name", node.title or "Sequential")
         
-        for child in node.children:
+        for child in sorted(node.children, key=lambda n: n.position):
             if child.node_type == NodeType.VERTICAL:
                 vert = ET.SubElement(root, "vertical")
                 vert.set("url_name", self._get_url_name(child.node_id))
@@ -300,7 +331,7 @@ class OpenEdxTargetAdapter:
         self._write_xml(self.work_dir / "sequential" / f"{url_name}.xml", root)
         
         # Recursively process vertical children
-        for child in node.children:
+        for child in sorted(node.children, key=lambda n: n.position):
             if child.node_type == NodeType.VERTICAL:
                 self._write_vertical(child)
 
@@ -319,7 +350,7 @@ class OpenEdxTargetAdapter:
         root = ET.Element("vertical")
         root.set("display_name", node.title or "Vertical")
         
-        for comp in node.children:
+        for comp in sorted(node.children, key=lambda n: n.position):
             if comp.node_type in (NodeType.HTML, NodeType.PAGE):
                 # HTML component
                 elem = ET.SubElement(root, "html")

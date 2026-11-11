@@ -52,6 +52,7 @@ def migrate_command(
     setup_logging(log_level, log_file)
 
     # --- Pre-flight checks (not pipeline steps) ---
+    target = target.strip().lower()
     if not source:
         source = _detect_source(source_path)
         logger.info("Auto-detected source LMS: %s", source)
@@ -73,7 +74,12 @@ def migrate_command(
         # 1. Inspect source course
         typer.echo(f"Inspecting {source.title()} course from {source_path}...")
         with reporter.step("Inspect source course"):
-            result = ingest.inspect(source_path, source_type=source, work_dir="data/extracted")
+            result = ingest.inspect(
+                source_path,
+                source_type=source,
+                work_dir="data/extracted",
+                target_type=target,
+            )
 
         course = result["course"]
         _print_course_summary(course, result)
@@ -123,9 +129,10 @@ def _detect_source(source_path: str) -> str:
     Raises:
         typer.Exit: If extension is not recognized
     """
-    if source_path.endswith(".mbz"):
+    lowered = source_path.lower()
+    if lowered.endswith(".mbz"):
         return "moodle"
-    if source_path.endswith(".tar.gz"):
+    if lowered.endswith((".tar.gz", ".tgz")):
         return "openedx"
 
     typer.echo("Error: Could not auto-detect source LMS. Use --source", err=True)

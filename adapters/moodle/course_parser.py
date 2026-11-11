@@ -18,11 +18,18 @@ Usage:
 ===============================================================================
 """
 
+import logging
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from core.archive_utils import resolve_under
+from core.errors import SecurityError
+from core.identity import sha256_bytes, stable_id
 from .backup_reader import MoodleBackupReader
 from domain.enums import NodeType
+
+logger = logging.getLogger(__name__)
 
 class MoodleCourseParser:
     """
@@ -37,6 +44,7 @@ class MoodleCourseParser:
         """Initialize the parser with a MoodleBackupReader and empty fragments list."""
         self.reader = MoodleBackupReader()
         self.fragments: List[Dict[str, Any]] = []
+        self._course_key = ""
 
     def parse(self, mbz_path: str, work_dir: str) -> Dict[str, Any]:
         """
@@ -70,6 +78,7 @@ class MoodleCourseParser:
         """
         # Step 1: Extract archive and read manifest
         self.fragments = []
+        self._course_key = ""
         extracted = self.reader.extract_archive(mbz_path, work_dir)
         manifest = self.reader.read_manifest(extracted)
 
@@ -89,6 +98,8 @@ class MoodleCourseParser:
             lang = course_root.findtext("lang", "en")
             course_id = course_root.findtext("id", "")
             self._store_fragment(extracted, "course/course.xml")
+
+        self._course_key = f"moodle:{course_id or course_shortname or course_title}"
 
         # Step 3: Initialize containers for course data
         sections: List[Dict[str, Any]] = []
@@ -271,7 +282,15 @@ class MoodleCourseParser:
         # Call module-specific parser with graceful error handling
         try:
             result = dispatch[module_name](root, activity_info, extracted, manifest, assessments, assets)
-        except Exception:
+        except SecurityError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Skipping malformed activity %s (%s): %s",
+                activity_info.get("cmid"),
+                module_name,
+                exc,
+            )
             base["node_type"] = NodeType.UNKNOWN.value
             return base
 
@@ -306,14 +325,20 @@ class MoodleCourseParser:
         Returns:
             Dictionary with title, node_type=PAGE, and content_html
         """
-        inner = root.find("page") or root
+        inner = root.find("page")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
         content = inner.findtext("content", "")
+        # Moodle pages have an optional intro and a body.  Preserve them
+        # separately so a round-trip does not concatenate the body twice.
+        body = content if content.strip() else intro
         return {
             "title": title,
             "node_type": NodeType.PAGE.value,
-            "content_html": _join_html(intro, content),
+            "content_html": body,
+            "metadata": {"intro_html": intro if content.strip() else ""},
         }
 
     def _parse_label(
@@ -332,7 +357,9 @@ class MoodleCourseParser:
         Returns:
             Dictionary with title, node_type=HTML, and content_html (intro only)
         """
-        inner = root.find("label") or root
+        inner = root.find("label")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
         # Check if intro contains a YouTube link
@@ -371,7 +398,9 @@ class MoodleCourseParser:
             Dictionary with title, node_type (VIDEO or ACTIVITY), and metadata
         """
         import re
-        inner = root.find("url") or root
+        inner = root.find("url")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         url = inner.findtext("externalurl", "")
         
@@ -422,7 +451,9 @@ class MoodleCourseParser:
         Returns:
             Dictionary with title, node_type=FORUM, and content_html (intro only)
         """
-        inner = root.find("forum") or root
+        inner = root.find("forum")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
         return {
@@ -449,7 +480,9 @@ class MoodleCourseParser:
             Dictionary with title, node_type=QUIZ, content_html,
             and metadata.question_ids (list of question IDs from question bank)
         """
-        inner = root.find("quiz") or root
+        inner = root.find("quiz")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
         
@@ -493,7 +526,9 @@ class MoodleCourseParser:
         Returns:
             Dictionary with title, node_type=ACTIVITY, and metadata.asset_id
         """
-        inner = root.find("resource") or root
+        inner = root.find("resource")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
 
         file_ids = self.reader.read_inforef(extracted, activity_info["directory"])
@@ -518,7 +553,8 @@ class MoodleCourseParser:
                 if ext in ("mp4", "webm", "ogg", "mov", "avi"):
                     is_video = True
 
-            asset_id = str(uuid.uuid4())
+            asset_path = f"files/{contenthash[:2]}/{contenthash}"
+            asset_id = self._asset_id(asset_path)
             # Store asset with correct path
             assets.append({
                 "asset_id": asset_id,
@@ -530,7 +566,6 @@ class MoodleCourseParser:
             })
             # Create download link for non-video resources
             if not is_video:
-                asset_path = f"files/{contenthash[:2]}/{contenthash}"
                 download_link = f'<p><a href="/static/{asset_path}">Download {filename}</a></p>'
             break
 
@@ -572,7 +607,9 @@ class MoodleCourseParser:
             Dictionary with title, node_type=SCORM, and metadata.activity_type
         """
         # Read the SCORM settings from scorm.xml
-        inner = root.find("scorm") or root
+        inner = root.find("scorm")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         scorm_settings = {
             "version": inner.findtext("version", ""),
@@ -585,13 +622,13 @@ class MoodleCourseParser:
 
         # Find the SCORM zip file in the backup structure
         activity_dir = activity_info["directory"]
-        zip_path = extracted / activity_dir / "package.zip"
-        if not zip_path.exists():
-            zip_path = extracted / activity_dir / "package"
-        
-        if zip_path.exists():
-            relative_zip = str(zip_path.relative_to(extracted))
-            asset_id = str(uuid.uuid4())
+        zip_path = resolve_under(extracted, f"{activity_dir}/package.zip")
+        if not zip_path.is_file():
+            zip_path = resolve_under(extracted, f"{activity_dir}/package")
+
+        if zip_path.is_file():
+            relative_zip = zip_path.relative_to(extracted).as_posix()
+            asset_id = self._asset_id(relative_zip)
             assets.append({
                 "asset_id": asset_id,
                 "path": relative_zip,
@@ -618,7 +655,9 @@ class MoodleCourseParser:
             }
 
     def _parse_choice(self, root, activity_info, extracted, manifest, assessments, assets):
-        inner = root.find("choice") or root
+        inner = root.find("choice")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
         return {
@@ -628,7 +667,9 @@ class MoodleCourseParser:
         }
 
     def _parse_book(self, root, activity_info, extracted, manifest, assessments, assets):
-        inner = root.find("book") or root
+        inner = root.find("book")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
         # Parse chapters
@@ -646,7 +687,9 @@ class MoodleCourseParser:
         }
 
     def _parse_glossary(self, root, activity_info, extracted, manifest, assessments, assets):
-        inner = root.find("glossary") or root
+        inner = root.find("glossary")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
         return {
@@ -656,7 +699,9 @@ class MoodleCourseParser:
         }
 
     def _parse_wiki(self, root, activity_info, extracted, manifest, assessments, assets):
-        inner = root.find("wiki") or root
+        inner = root.find("wiki")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
         return {
@@ -666,7 +711,9 @@ class MoodleCourseParser:
         }
 
     def _parse_assign(self, root, activity_info, extracted, manifest, assessments, assets):
-        inner = root.find("assign") or root
+        inner = root.find("assign")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
         return {
@@ -676,7 +723,9 @@ class MoodleCourseParser:
         }
 
     def _parse_workshop(self, root, activity_info, extracted, manifest, assessments, assets):
-        inner = root.find("workshop") or root
+        inner = root.find("workshop")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
         # Workshop in Moodle is a peer assessment activity.
@@ -692,7 +741,9 @@ class MoodleCourseParser:
         }
 
     def _parse_lesson(self, root, activity_info, extracted, manifest, assessments, assets):
-        inner = root.find("lesson") or root
+        inner = root.find("lesson")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
         return {
@@ -718,7 +769,11 @@ class MoodleCourseParser:
         Returns:
             Dictionary with title, node_type=VIDEO, and metadata.asset_id
         """
-        inner = root.find("videofile") or root.find("resource") or root
+        inner = root.find("videofile")
+        if inner is None:
+            inner = root.find("resource")
+        if inner is None:
+            inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         
         # Get file IDs from inforef.xml
@@ -738,8 +793,8 @@ class MoodleCourseParser:
             if not contenthash or not filename:
                 continue
             if mimetype and "video" in mimetype.lower():
-                asset_id = str(uuid.uuid4())
                 asset_path = f"files/{contenthash[:2]}/{contenthash}"
+                asset_id = self._asset_id(asset_path)
                 assets.append({
                     "asset_id": asset_id,
                     "path": asset_path,
@@ -784,19 +839,24 @@ class MoodleCourseParser:
         raw_text = self.reader.read_raw_text(extracted, relative_path)
         if raw_text is None:
             return None
-        fragment_id = str(uuid.uuid4())
+        fragment_path = resolve_under(extracted, relative_path)
+        fragment_id = stable_id("fragment", "moodle", relative_path)
         self.fragments.append({
             "fragment_id": fragment_id,
             "kind": "xml",
             "source_location": {
                 "source_system": "moodle",
                 "package_path": relative_path,
-                "file_path": str(extracted / relative_path),
+                "file_path": str(fragment_path),
             },
             "raw_text": raw_text,
-            "checksum": None,
+            "checksum": sha256_bytes(raw_text.encode("utf-8")),
         })
         return fragment_id
+
+    def _asset_id(self, path: str) -> str:
+        """Return a deterministic asset ID for a Moodle content path."""
+        return stable_id("asset", self._course_key, path)
 
     # Question Bank Parsing
 

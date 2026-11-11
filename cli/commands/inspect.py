@@ -79,7 +79,12 @@ def inspect_command(
         typer.echo(f"Inspecting {source.title()} course from {path}...")
 
         with reporter.step("Inspect course (parse, transform, validate)"):
-            result = service.inspect(path, source_type=source, work_dir="data/extracted")
+            result = service.inspect(
+                path,
+                source_type=source,
+                work_dir="data/extracted",
+                target_type=validate_for,
+            )
 
         course = result["course"]
         parsed = result.get("parsed", {})
@@ -130,9 +135,10 @@ def _detect_source(path: str) -> str:
     Raises:
         typer.Exit: If extension is not recognized
     """
-    if path.endswith(".mbz"):
+    lowered = path.lower()
+    if lowered.endswith(".mbz"):
         return "moodle"
-    if path.endswith(".tar.gz"):
+    if lowered.endswith((".tar.gz", ".tgz")):
         return "openedx"
 
     typer.echo("Error: Could not auto-detect source LMS. Use --source", err=True)

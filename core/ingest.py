@@ -1,6 +1,6 @@
 import uuid
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from core.parse import ParseService
 from core.transform import TransformService
@@ -19,6 +19,7 @@ class IngestService:
         source_path: str,
         source_type: str = "openedx",
         work_dir: str = "data/extracted",
+        target_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Parse, transform, validate, and persist a source course."""
         job_id = str(uuid.uuid4())
@@ -31,11 +32,12 @@ class IngestService:
             )
 
         course = self.transform_service.transform(parsed, source_type, job_id)
-        report = self.validation_service.validate(course)
+        report = self.validation_service.validate(course, target=target_type)
+        course.mapping_notes = report
         save_job(
             job_id,
             source_type,
-            "",
+            target_type or "",
             course,
             report,
             parsed.get("extracted_path"),
@@ -47,5 +49,7 @@ class IngestService:
             "report": report,
             "raw_fragments_count": len(parsed.get("raw_fragments", [])),
             "extracted_path": parsed.get("extracted_path"),
+            "target_type": target_type,
+            "schema_version": course.schema_version,
             "parsed": parsed,
         }
