@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+
+from core.errors import JobAccessError
 from domain.entities import Course, MappingNote
 from domain.enums import Severity, SourceSystem
 from persistence import repositories
@@ -44,3 +47,32 @@ def test_job_lifecycle_fields_are_persisted():
     assert job["status"] == "migrated"
     assert job["output_path"] == "/tmp/out.mbz"
     assert job["updated_at"]
+
+
+def test_jobs_are_scoped_to_their_owner():
+    course = Course(course_id="course-owner", title="Owner", source_system=SourceSystem.OPENEDX)
+    repositories.save_job(
+        "job-owner", "openedx", "", course, [], owner="alice"
+    )
+
+    assert repositories.get_job("job-owner", owner="alice") is not None
+    assert repositories.get_job("job-owner", owner="bob") is None
+    assert repositories.list_jobs(owner="bob") == []
+    assert repositories.delete_job("job-owner", owner="bob") is False
+
+    with pytest.raises(JobAccessError):
+        repositories.save_job(
+            "job-owner", "openedx", "", course, [], owner="bob"
+        )
+
+    with pytest.raises(JobAccessError):
+        repositories.save_migration_job(
+            "job-owner",
+            "openedx",
+            "moodle",
+            course,
+            [],
+            owner="bob",
+        )
+
+    assert repositories.delete_job("job-owner", owner="alice") is True

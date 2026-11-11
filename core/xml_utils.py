@@ -23,26 +23,46 @@ def _max_bytes() -> int:
     return get_settings().max_xml_bytes
 
 
+def _max_depth() -> int:
+    """Resolve the configured XML nesting limit."""
+    return get_settings().max_xml_depth
+
+
+def _check_depth(root: Element, limit: int, source: str) -> None:
+    """Reject trees deeper than ``limit`` without recursive traversal."""
+    stack: list[tuple[Element, int]] = [(root, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > limit:
+            raise XmlSecurityError(
+                f"XML nesting exceeds {limit} levels: {source!r}"
+            )
+        stack.extend((child, depth + 1) for child in node)
+
+
 def parse_xml_bytes(
     data: bytes,
     *,
     source: str = "<memory>",
     max_bytes: int | None = None,
+    max_depth: int | None = None,
 ) -> Element:
-    """Parse untrusted XML bytes with entity and size protections."""
+    """Parse untrusted XML bytes with entity, size, and nesting protections."""
     limit = max_bytes if max_bytes is not None else _max_bytes()
     if len(data) > limit:
         raise XmlSecurityError(
             f"XML document exceeds {limit} bytes: {source!r} ({len(data)} bytes)"
         )
     try:
-        return DefusedElementTree.fromstring(data)
+        root = DefusedElementTree.fromstring(data)
     except DefusedXmlException as exc:
         raise XmlSecurityError(f"Unsafe XML in {source!r}: {exc}") from exc
     except ParseError:
         raise
     except Exception as exc:  # pragma: no cover - defensive for parser variants
         raise XmlSecurityError(f"Could not safely parse XML {source!r}: {exc}") from exc
+    _check_depth(root, max_depth if max_depth is not None else _max_depth(), source)
+    return root
 
 
 def parse_xml_text(
@@ -50,15 +70,22 @@ def parse_xml_text(
     *,
     source: str = "<string>",
     max_bytes: int | None = None,
+    max_depth: int | None = None,
 ) -> Element:
     """Parse untrusted XML text with the same protections as :func:`parse_xml_bytes`."""
-    return parse_xml_bytes(text.encode("utf-8"), source=source, max_bytes=max_bytes)
+    return parse_xml_bytes(
+        text.encode("utf-8"),
+        source=source,
+        max_bytes=max_bytes,
+        max_depth=max_depth,
+    )
 
 
 def parse_xml_file(
     path: str | Path,
     *,
     max_bytes: int | None = None,
+    max_depth: int | None = None,
 ) -> Element:
     """Read and safely parse an XML file, checking size before loading it."""
     xml_path = Path(path)
@@ -75,4 +102,5 @@ def parse_xml_file(
         xml_path.read_bytes(),
         source=str(xml_path),
         max_bytes=limit,
+        max_depth=max_depth,
     )

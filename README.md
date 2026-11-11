@@ -80,9 +80,20 @@ All runtime paths and limits are controlled by environment variables. By default
 | `LMS_CONVERTER_MAX_EXTRACT_MEMBERS` | `50000` | Archive entry limit |
 | `LMS_CONVERTER_MAX_COMPRESSION_RATIO` | `250` | Decompression-bomb guard |
 | `LMS_CONVERTER_MAX_XML_BYTES` | `67108864` | XML document limit |
+| `LMS_CONVERTER_MAX_XML_DEPTH` | `256` | XML nesting limit |
+| `LMS_CONVERTER_UPLOAD_TTL_SECONDS` | `86400` | Upload staging retention |
 | `LMS_CONVERTER_ENV` | `development` | Runtime environment |
-| `LMS_CONVERTER_AUTH_MODE` | `none` | Authentication mode |
+| `LMS_CONVERTER_AUTH_MODE` | `none` | `none` or trusted `proxy` identity |
+| `LMS_CONVERTER_TRUSTED_USER_HEADER` | `X-Forwarded-User` | Proxy identity header |
 | `LMS_CONVERTER_LOG_LEVEL` | `INFO` | Default log level |
+
+## Security
+
+- In development, the UI uses the local identity.
+- In production, set `LMS_CONVERTER_ENV=production` and terminate authentication in a trusted reverse proxy. Configure `LMS_CONVERTER_AUTH_MODE=proxy` and the identity header; the UI fails closed when no identity is present.
+- Do not expose Streamlit directly to the internet.
+- UI jobs are scoped to the authenticated identity, so one user cannot open another user's job by ID.
+- Uploads and migration outputs are written only under the configured server-owned directories.
 
 For local development with repository-local data:
 

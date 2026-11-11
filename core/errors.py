@@ -29,6 +29,18 @@ class XmlSecurityError(SecurityError):
     """An XML document violates parser safety limits."""
 
 
+class UploadSecurityError(SecurityError):
+    """An upload violates size, naming, or storage boundaries."""
+
+
+class AuthenticationError(LmsConverterError):
+    """The current request has no acceptable authenticated identity."""
+
+
+class JobAccessError(LmsConverterError):
+    """A job belongs to a different identity than the caller."""
+
+
 class IntegrityError(LmsConverterError):
     """The canonical course graph violates referential integrity."""
 

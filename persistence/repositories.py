@@ -15,12 +15,16 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from core.config import get_settings
+from core.errors import JobAccessError
+
+DEFAULT_OWNER = "local"
 
 _REQUIRED_COLUMNS = {
     "status": "TEXT NOT NULL DEFAULT 'inspected'",
     "output_path": "TEXT",
     "error": "TEXT",
     "updated_at": "TIMESTAMP",
+    "owner": "TEXT NOT NULL DEFAULT 'local'",
 }
 
 
@@ -52,6 +56,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             source_type TEXT NOT NULL,
             target_type TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'inspected',
+            owner TEXT NOT NULL DEFAULT 'local',
             course_json TEXT,
             report_json TEXT,
             extracted_path TEXT,
@@ -104,20 +109,27 @@ def save_job(
     extracted_path: Optional[str] = None,
     *,
     status: str = "inspected",
+    owner: str = DEFAULT_OWNER,
 ) -> None:
     """Save a newly inspected job and its canonical course snapshot."""
     init_db()
     with _connect() as conn:
+        existing = conn.execute(
+            "SELECT owner FROM jobs WHERE job_id = ?", (job_id,)
+        ).fetchone()
+        if existing and existing["owner"] != owner:
+            raise JobAccessError(f"Job {job_id} belongs to another owner")
         conn.execute(
             """
             INSERT INTO jobs
-                (job_id, source_type, target_type, status, course_json,
+                (job_id, source_type, target_type, status, owner, course_json,
                  report_json, extracted_path, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(job_id) DO UPDATE SET
                 source_type = excluded.source_type,
                 target_type = excluded.target_type,
                 status = excluded.status,
+                owner = excluded.owner,
                 course_json = excluded.course_json,
                 report_json = excluded.report_json,
                 extracted_path = excluded.extracted_path,
@@ -128,6 +140,7 @@ def save_job(
                 source_type,
                 target_type or "",
                 status,
+                owner,
                 _serialize_course(course),
                 _serialize_report(report),
                 extracted_path,
@@ -144,14 +157,20 @@ def save_migration_job(
     report: list,
     extracted_path: Optional[str] = None,
     output_path: Optional[str] = None,
+    *,
+    owner: str = DEFAULT_OWNER,
 ) -> None:
     """Mark an existing job as migrated, preserving its report when omitted."""
     init_db()
     with _connect() as conn:
         existing = conn.execute(
-            "SELECT report_json, extracted_path FROM jobs WHERE job_id = ?",
+            "SELECT report_json, extracted_path, owner FROM jobs WHERE job_id = ?",
             (job_id,),
         ).fetchone()
+
+        if existing and existing["owner"] != owner:
+            raise JobAccessError(f"Job {job_id} belongs to another owner")
+        effective_owner = owner
 
         report_json = _serialize_report(report) if report else None
         if report_json is None and existing:
@@ -162,13 +181,14 @@ def save_migration_job(
         conn.execute(
             """
             INSERT INTO jobs
-                (job_id, source_type, target_type, status, course_json,
+                (job_id, source_type, target_type, status, owner, course_json,
                  report_json, extracted_path, output_path, error, updated_at)
-            VALUES (?, ?, ?, 'migrated', ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, 'migrated', ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)
             ON CONFLICT(job_id) DO UPDATE SET
                 source_type = excluded.source_type,
                 target_type = excluded.target_type,
                 status = excluded.status,
+                owner = excluded.owner,
                 course_json = excluded.course_json,
                 report_json = excluded.report_json,
                 extracted_path = excluded.extracted_path,
@@ -180,6 +200,7 @@ def save_migration_job(
                 job_id,
                 source_type,
                 target_type,
+                effective_owner,
                 _serialize_course(course),
                 report_json or "[]",
                 extracted_path,
@@ -189,58 +210,101 @@ def save_migration_job(
         conn.commit()
 
 
-def mark_job_failed(job_id: str, error: str) -> None:
+def mark_job_failed(
+    job_id: str, error: str, *, owner: Optional[str] = None
+) -> None:
     """Record a terminal failure without discarding the stored course snapshot."""
     init_db()
     with _connect() as conn:
-        conn.execute(
-            """
-            UPDATE jobs
-            SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE job_id = ?
-            """,
-            (error, job_id),
-        )
+        if owner is None:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE job_id = ?
+                """,
+                (error, job_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE jobs
+                SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE job_id = ? AND owner = ?
+                """,
+                (error, job_id, owner),
+            )
         conn.commit()
 
 
-def get_job(job_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieve a job by ID."""
+def get_job(job_id: str, *, owner: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Retrieve a job by ID, optionally constrained to its owner."""
     init_db()
     with _connect() as conn:
-        row = conn.execute(
-            """
-            SELECT job_id, source_type, target_type, status, course_json,
-                   report_json, extracted_path, output_path, error,
-                   created_at, updated_at
-            FROM jobs WHERE job_id = ?
-            """,
-            (job_id,),
-        ).fetchone()
+        if owner is None:
+            row = conn.execute(
+                """
+                SELECT job_id, source_type, target_type, status, owner,
+                       course_json, report_json, extracted_path, output_path,
+                       error, created_at, updated_at
+                FROM jobs WHERE job_id = ?
+                """,
+                (job_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT job_id, source_type, target_type, status, owner,
+                       course_json, report_json, extracted_path, output_path,
+                       error, created_at, updated_at
+                FROM jobs WHERE job_id = ? AND owner = ?
+                """,
+                (job_id, owner),
+            ).fetchone()
     return dict(row) if row else None
 
 
-def list_jobs(limit: int = 100) -> List[Dict[str, Any]]:
+def list_jobs(
+    limit: int = 100, *, owner: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """Return recent jobs without loading the potentially large course JSON."""
     init_db()
     with _connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT job_id, source_type, target_type, status, extracted_path,
-                   output_path, error, created_at, updated_at
-            FROM jobs
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (max(0, int(limit)),),
-        ).fetchall()
+        if owner is None:
+            rows = conn.execute(
+                """
+                SELECT job_id, source_type, target_type, status, owner,
+                       extracted_path, output_path, error, created_at, updated_at
+                FROM jobs
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (max(0, int(limit)),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT job_id, source_type, target_type, status, owner,
+                       extracted_path, output_path, error, created_at, updated_at
+                FROM jobs
+                WHERE owner = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (owner, max(0, int(limit))),
+            ).fetchall()
     return [dict(row) for row in rows]
 
 
-def delete_job(job_id: str) -> bool:
+def delete_job(job_id: str, *, owner: Optional[str] = None) -> bool:
     """Delete a job. Returns whether a row was removed."""
     init_db()
     with _connect() as conn:
-        cursor = conn.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+        if owner is None:
+            cursor = conn.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+        else:
+            cursor = conn.execute(
+                "DELETE FROM jobs WHERE job_id = ? AND owner = ?", (job_id, owner)
+            )
         conn.commit()
         return cursor.rowcount > 0

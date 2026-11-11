@@ -100,9 +100,16 @@ def safe_extract_tar(
                 f"Archive has {len(members)} entries; limit is {cfg.max_entries}"
             )
 
+        seen: set[str] = set()
         total_bytes = 0
         for member in members:
-            _safe_member_path(target, member.name)
+            destination = _safe_member_path(target, member.name)
+            key = str(destination)
+            if key in seen:
+                raise ArchiveSecurityError(
+                    f"Archive contains duplicate entry: {member.name!r}"
+                )
+            seen.add(key)
             if member.issym() or member.islnk():
                 raise ArchiveSecurityError(f"Archive contains a link: {member.name!r}")
             if member.isdev() or member.isfifo():
@@ -145,6 +152,7 @@ def safe_extract_zip(
     cfg = limits or _configured_limits()
     target = Path(target_dir)
     target.mkdir(parents=True, exist_ok=True)
+    archive_size = Path(archive_path).stat().st_size
 
     with zipfile.ZipFile(archive_path, "r") as archive:
         infos = archive.infolist()
@@ -156,12 +164,13 @@ def safe_extract_zip(
         seen: set[str] = set()
         total_bytes = 0
         for info in infos:
-            if info.filename in seen:
+            destination = _safe_member_path(target, info.filename)
+            key = str(destination)
+            if key in seen:
                 raise ArchiveSecurityError(
                     f"Archive contains duplicate entry: {info.filename!r}"
                 )
-            seen.add(info.filename)
-            _safe_member_path(target, info.filename)
+            seen.add(key)
 
             mode = info.external_attr >> 16
             if stat.S_ISLNK(mode):
@@ -191,6 +200,12 @@ def safe_extract_zip(
                 limits=cfg,
             )
 
+        _check_ratio(
+            name=str(archive_path),
+            uncompressed_size=total_bytes,
+            compressed_size=archive_size,
+            limits=cfg,
+        )
         archive.extractall(target)
 
 

@@ -10,11 +10,17 @@ from persistence.repositories import save_job
 
 
 class IngestService:
-    def __init__(self, work_dir: str | Path | None = None):
+    def __init__(
+        self,
+        work_dir: str | Path | None = None,
+        *,
+        owner: str = "local",
+    ):
         self.parse_service = ParseService()
         self.transform_service = TransformService()
         self.validation_service = ValidationService()
         self.work_dir = Path(work_dir) if work_dir is not None else get_settings().work_dir
+        self.owner = owner
 
     def inspect(
         self,
@@ -44,6 +50,7 @@ class IngestService:
             course,
             report,
             parsed.get("extracted_path"),
+            owner=self.owner,
         )
 
         return {

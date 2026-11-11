@@ -17,9 +17,10 @@ from persistence.repositories import mark_job_failed, save_migration_job
 class MigrationService:
     """Service for migrating courses between LMS platforms."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, owner: str = "local") -> None:
         self.openedx_target = OpenEdxTargetAdapter()
         self.moodle_target = MoodleTargetAdapter()
+        self.owner = owner
 
     def migrate_to_openedx(
         self,
@@ -36,7 +37,9 @@ class MigrationService:
             )
         except Exception as exc:
             if job_id:
-                mark_job_failed(job_id, f"{type(exc).__name__}: {exc}")
+                mark_job_failed(
+                    job_id, f"{type(exc).__name__}: {exc}", owner=self.owner
+                )
             raise
         self._persist(
             course,
@@ -63,7 +66,9 @@ class MigrationService:
             )
         except Exception as exc:
             if job_id:
-                mark_job_failed(job_id, f"{type(exc).__name__}: {exc}")
+                mark_job_failed(
+                    job_id, f"{type(exc).__name__}: {exc}", owner=self.owner
+                )
             raise
         self._persist(
             course,
@@ -92,4 +97,5 @@ class MigrationService:
             report or [],
             source_extracted_path,
             output_path,
+            owner=self.owner,
         )
