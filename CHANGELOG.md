@@ -23,6 +23,7 @@ The format follows Keep a Changelog, and the project intends to use semantic ver
 - Escaped, shared HTML report rendering.
 - SQLite job lifecycle fields and failed-job recording.
 - Tests for archive/XML hardening, uploads, output containment, authentication, job ownership, fidelity regressions, report escaping, and persistence.
+- Integration tests for ingest and migration services, CLI end-to-end coverage, Streamlit smoke checks, and legacy schema migration coverage.
 
 ### Changed
 

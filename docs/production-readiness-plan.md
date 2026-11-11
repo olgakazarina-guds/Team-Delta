@@ -32,10 +32,10 @@ Status as of 2026-11-11.
 | --- | --- | --- | --- |
 | Repository hygiene | Complete | Generated course exports are untracked; dead modules removed; repository policies added in `400850c`, `64e4127`, and `bcb4da4` | Decide whether historical generated data requires a git history rewrite |
 | Packaging and configuration | Complete | `uv build` succeeds; clean-venv wheel install works; `lms-converter --version` works outside the repository; centralized `Settings` added in `5729227` | Add release automation and CI installation checks |
-| Security and input controls | Implemented, uncommitted | Bounded uploads, archive and XML limits, output containment, production auth, owner-scoped jobs, sanitized UI errors, and 45 unit tests | Review and commit; add container and supply-chain controls |
+| Security and input controls | Complete | Committed in `235b2f5`; bounded uploads, archive and XML limits, output containment, production auth, owner-scoped jobs, and sanitized UI errors | Add container and supply-chain controls |
 | Persistence | Partial | SQLite job records, lifecycle states, and owner field exist | Add schema versioning, stop running DDL on reads, add retention and backup/restore tests |
 | Migration fidelity | Partial | Canonical model, Moodle/Open edX adapters, validation notes, and JSON/HTML reports exist | Build a golden corpus, real-LMS import harness, and versioned fidelity scorecard |
-| Testing and CI | Partial | 45 unit tests pass; no integration, CLI end-to-end, Streamlit, or real-LMS tests; no CI pipeline | Add test layers, coverage policy, linting, type checking, and CI gates |
+| Testing and CI | Partial | 68 tests pass locally, including integration, CLI end-to-end, Streamlit smoke, and legacy schema migration; no real-LMS tests; no CI pipeline | Add coverage policy, linting, type checking, and CI gates |
 | Operations | Not started | No deployment runbook, health checks, metrics, or container image | Add observability, deployment artifacts, backup/restore drill, and operator documentation |
 | Documentation | Partial | README, security policy, contribution guide, changelog, license, and architecture diagram exist | Add architecture reference, deployment runbook, format matrix, and release checklist |
 | Real-LMS certification | Not started | No live Moodle or Open edX environment available | Provision pinned test environments and run import certification |
@@ -85,7 +85,7 @@ Effort sizes are indicative: S is up to three working days, M is one to two week
 
 | ID | Deliverable | Dependencies | Owner | Size | Acceptance |
 | --- | --- | --- | --- | --- | --- |
-| PR-01 | Commit and stabilize security controls | Current working tree | Tech Lead | S | Workstream 3 changes reviewed; 45 tests pass; build and clean install pass; changes committed |
+| PR-01 | Commit and stabilize security controls | None | Tech Lead | S | Workstream 3 changes reviewed; test suite passes; build and clean install pass; changes committed in `235b2f5` |
 | PR-02 | Expand the test suite | PR-01 | QA/Automation | M | Integration, CLI end-to-end, Streamlit smoke, persistence migration, and security tests exist and run locally |
 | PR-03 | Add CI and quality gates | PR-02 | Security/DevOps | M | Clean checkout runs lint, format, type checks, tests, coverage policy, security scans, build, and wheel install |
 | PR-04 | Add release packaging automation | PR-03 | Tech Lead | S | Versioned wheel and source distribution are built and installed by CI; changelog and version are checked |
@@ -104,7 +104,7 @@ Durations are indicative and assume one to two engineers. They are not calendar 
 
 | Milestone | Scope | Exit criteria | Dependencies | Indicative duration |
 | --- | --- | --- | --- | --- |
-| M0 Baseline | PR-01, PR-02 | Security work committed; baseline test suite runs locally; test gaps recorded | Current working tree | 1-2 weeks |
+| M0 Baseline | PR-01, PR-02 | Security work committed; baseline test suite runs locally; test gaps recorded | None | 1-2 weeks |
 | M1 Secure foundation | PR-03 to PR-06, PR-11 | CI is green; schema versioning and retention work; deployment artifacts meet the hardening checklist | M0 | 3-5 weeks |
 | M2 Certification | PR-07 to PR-09 | Golden corpus, LMS import harness, and scorecard are complete for the agreed feature matrix | M1, DEP-01, D-04 | 4-6 weeks |
 | M3 Pilot | PR-10, PR-12 | Documentation and runbooks are complete; pilot checklist and rollback procedure are approved | M2 | 2-3 weeks |
@@ -148,7 +148,7 @@ R = responsible, A = accountable, C = consulted, I = informed.
 | A-02 | Assumption | Target LMS versions can be pinned in test environments | Medium | Medium | Confirm versions through D-04 before building the harness | Tech Lead |
 | DEP-01 | Dependency | LMS test environment access is required for certification | High | High | Assign an owner and confirm access before M2 | Project Lead |
 | DEP-02 | Dependency | Legal review is required before release distribution | Medium | Medium | Start review during M1; record the outcome in the decision log | Project Lead |
-| ISS-01 | Issue | Current security changes are uncommitted | Medium | High | Complete PR-01 before starting dependent work | Tech Lead |
+| ISS-01 | Issue | Security changes were uncommitted | Medium | High | Resolved in `235b2f5`; PR-01 closed | Tech Lead |
 
 ## 9. Quality, security, and release gates
 
