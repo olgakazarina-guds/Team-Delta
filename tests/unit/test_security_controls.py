@@ -87,9 +87,7 @@ def test_zip_normalized_duplicate_is_rejected(tmp_path: Path):
 
 def test_zip_total_compression_ratio_is_rejected(tmp_path: Path):
     archive_path = tmp_path / "bomb.zip"
-    with zipfile.ZipFile(
-        archive_path, "w", compression=zipfile.ZIP_DEFLATED
-    ) as archive:
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for index in range(6):
             archive.writestr(f"chunk-{index}.bin", b"\0" * (1024 * 1024))
 
@@ -215,9 +213,7 @@ def test_expired_upload_sessions_are_cleaned(tmp_path: Path):
     old_time = time.time() - 7200
     os.utime(old_dir, (old_time, old_time))
 
-    removed = cleanup_expired_uploads(
-        settings, max_age_seconds=3600, now=time.time()
-    )
+    removed = cleanup_expired_uploads(settings, max_age_seconds=3600, now=time.time())
 
     assert removed == 1
     assert not old_dir.exists()
@@ -244,9 +240,7 @@ def test_auth_fails_closed_in_production(tmp_path: Path):
         auth_mode="proxy",
         trusted_user_header="X-Forwarded-User",
     )
-    identity = require_identity(
-        proxied, headers={"x-forwarded-user": "alice"}
-    )
+    identity = require_identity(proxied, headers={"x-forwarded-user": "alice"})
     assert identity.user_id == "alice"
     assert identity.mode == "proxy"
 

@@ -1,16 +1,18 @@
 """
-Parse Service – Routes source parsing to the appropriate LMS adapter.
+Parse Service - Routes source parsing to the appropriate LMS adapter.
 """
 
-from adapters.openedx.course_parser import OpenEdxCourseParser
+from typing import ClassVar
+
 from adapters.moodle.course_parser import MoodleCourseParser
+from adapters.openedx.course_parser import OpenEdxCourseParser
 from core.errors import UnsupportedSourceError
 
 
 class ParseService:
     """Route a source package to the appropriate LMS parser."""
 
-    _ALIASES = {
+    _ALIASES: ClassVar[dict[str, str]] = {
         "openedx": "openedx",
         "open-edx": "openedx",
         "edx": "openedx",
@@ -25,6 +27,5 @@ class ParseService:
         if source == "moodle":
             return MoodleCourseParser().parse(source_path, work_dir)
         raise UnsupportedSourceError(
-            f"Unsupported source type: {source_type!r}. "
-            "Supported sources: openedx, moodle"
+            f"Unsupported source type: {source_type!r}. Supported sources: openedx, moodle"
         )

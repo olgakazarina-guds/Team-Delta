@@ -1,5 +1,5 @@
 """
-Course Migration CLI – Migrate courses between Moodle and Open edX.
+Course Migration CLI - Migrate courses between Moodle and Open edX.
 
 Supports:
 - Moodle (.mbz) -> Open edX (.tar.gz)
@@ -10,13 +10,13 @@ Validates migration readiness before conversion and shows detailed progress.
 
 import logging
 from pathlib import Path
-from typing import List, Any
+from typing import Any
 
 import typer
 
 from core.ingest import IngestService
-from core.migrate import MigrationService
 from core.logging_conf import setup_logging
+from core.migrate import MigrationService
 from core.process_report import ProcessReporter
 
 logger = logging.getLogger(__name__)
@@ -30,12 +30,8 @@ def migrate_command(
     target: str = typer.Option(
         "openedx", "--target", "-t", help="Target LMS: 'openedx' or 'moodle'"
     ),
-    output: str = typer.Option(
-        "export.tar.gz", "--output", "-o", help="Output file path"
-    ),
-    detailed: bool = typer.Option(
-        False, "--detailed", "-d", help="Show detailed progress"
-    ),
+    output: str = typer.Option("export.tar.gz", "--output", "-o", help="Output file path"),
+    detailed: bool = typer.Option(False, "--detailed", "-d", help="Show detailed progress"),
     log_level: str = typer.Option(
         "INFO", "--log-level", "-l", help="Console log level: DEBUG, INFO, WARNING, ERROR"
     ),
@@ -67,7 +63,7 @@ def migrate_command(
 
     ingest = IngestService()
     course = None
-    notes: List[Any] = []
+    notes: list[Any] = []
     output_path = output
     failed = False
     try:
@@ -158,7 +154,7 @@ def _print_course_summary(course: Any, result: dict) -> None:
     typer.echo(f"Raw Fragments: {result['raw_fragments_count']}")
 
 
-def _validate_migration(notes: List[Any]) -> None:
+def _validate_migration(notes: list[Any]) -> None:
     """
     Print validation notes and abort if errors exist.
 
@@ -182,16 +178,13 @@ def _validate_migration(notes: List[Any]) -> None:
     warning_count = sum(
         1
         for n in notes
-        if (n.severity.value if hasattr(n.severity, "value") else n.severity)
-        == "warning"
+        if (n.severity.value if hasattr(n.severity, "value") else n.severity) == "warning"
     )
 
     typer.echo(f"Errors: {error_count}, Warnings: {warning_count}")
 
     for note in notes:
-        severity = (
-            note.severity.value if hasattr(note.severity, "value") else str(note.severity)
-        )
+        severity = note.severity.value if hasattr(note.severity, "value") else str(note.severity)
         typer.echo(f"  [{severity}] {note.code}: {note.message}")
 
     if error_count > 0:
@@ -248,11 +241,12 @@ def _perform_migration(course: Any, target: str, output: str, result: dict) -> s
     except Exception as e:
         logger.exception("Migration conversion failed")
         typer.echo(f"Migration failed: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
-def _print_migration_summary(course: Any, notes: List[Any], output_path: str, result: dict) -> None:
+def _print_migration_summary(course: Any, notes: list[Any], output_path: str, result: dict) -> None:
     """Print migration summary with content statistics."""
+
     def count_node_type(nodes, target_type):
         count = 0
         for node in nodes:
@@ -281,6 +275,7 @@ def _print_migration_summary(course: Any, notes: List[Any], output_path: str, re
 
     typer.echo(f"\nMigration successful! Output saved to: {output_path}")
 
+
 def _print_node_tree(node: Any, indent: int = 0) -> None:
     """
     Recursively print content node tree with indentation.
@@ -290,9 +285,7 @@ def _print_node_tree(node: Any, indent: int = 0) -> None:
         indent: Current indentation level
     """
     prefix = "  " * indent
-    node_type = (
-        node.node_type.value if hasattr(node.node_type, "value") else node.node_type
-    )
+    node_type = node.node_type.value if hasattr(node.node_type, "value") else node.node_type
     title = node.title or "Untitled"
     typer.echo(f"{prefix}- {node_type}: {title}")
 

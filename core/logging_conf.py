@@ -27,7 +27,6 @@ Description:
 
 import logging
 from pathlib import Path
-from typing import Optional, Union
 
 from rich.logging import RichHandler
 
@@ -44,14 +43,17 @@ _LEVELS = {
 }
 
 
-def resolve_level(level: Union[str, int]) -> int:
+def resolve_level(level: str | int) -> int:
     """Turn a level name ('info', 'DEBUG', …) or int into a logging constant."""
     if isinstance(level, int):
         return level
     return _LEVELS.get(level.upper(), logging.INFO)
 
 
-def setup_logging(level: Union[str, int] = "INFO", log_file: Optional[str] = None,) -> logging.Logger:
+def setup_logging(
+    level: str | int = "INFO",
+    log_file: str | None = None,
+) -> logging.Logger:
     """
     Configure the root logger and return the package logger ('lms_convert').
 
@@ -90,9 +92,9 @@ def setup_logging(level: Union[str, int] = "INFO", log_file: Optional[str] = Non
         path.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(path, encoding="utf-8")
         file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
-        ))
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)-8s %(name)s: %(message)s")
+        )
         setattr(file_handler, _OWNED, True)
         root.addHandler(file_handler)
 

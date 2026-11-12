@@ -22,6 +22,4 @@ def test_streamlit_app_fails_closed_in_production(monkeypatch: pytest.MonkeyPatc
     app = AppTest.from_file("streamlit_app.py", default_timeout=30).run()
 
     assert not app.exception
-    assert [error.value for error in app.error] == [
-        "Authentication is required."
-    ]
+    assert [error.value for error in app.error] == ["Authentication is required."]

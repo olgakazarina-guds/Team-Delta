@@ -20,9 +20,7 @@ def test_migration_job_preserves_report():
     ]
 
     repositories.save_job("job-1", "openedx", "", course, report)
-    repositories.save_migration_job(
-        "job-1", "openedx", "moodle", course, [], "/tmp/extract"
-    )
+    repositories.save_migration_job("job-1", "openedx", "moodle", course, [], "/tmp/extract")
 
     job = repositories.get_job("job-1")
     assert job is not None
@@ -51,9 +49,7 @@ def test_job_lifecycle_fields_are_persisted():
 
 def test_jobs_are_scoped_to_their_owner():
     course = Course(course_id="course-owner", title="Owner", source_system=SourceSystem.OPENEDX)
-    repositories.save_job(
-        "job-owner", "openedx", "", course, [], owner="alice"
-    )
+    repositories.save_job("job-owner", "openedx", "", course, [], owner="alice")
 
     assert repositories.get_job("job-owner", owner="alice") is not None
     assert repositories.get_job("job-owner", owner="bob") is None
@@ -61,9 +57,7 @@ def test_jobs_are_scoped_to_their_owner():
     assert repositories.delete_job("job-owner", owner="bob") is False
 
     with pytest.raises(JobAccessError):
-        repositories.save_job(
-            "job-owner", "openedx", "", course, [], owner="bob"
-        )
+        repositories.save_job("job-owner", "openedx", "", course, [], owner="bob")
 
     with pytest.raises(JobAccessError):
         repositories.save_migration_job(

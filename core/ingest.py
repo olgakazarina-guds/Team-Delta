@@ -1,6 +1,6 @@
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from core.config import get_settings
 from core.parse import ParseService
@@ -27,8 +27,8 @@ class IngestService:
         source_path: str,
         source_type: str = "openedx",
         work_dir: str | Path | None = None,
-        target_type: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        target_type: str | None = None,
+    ) -> dict[str, Any]:
         """Parse, transform, validate, and persist a source course."""
         job_id = str(uuid.uuid4())
         root = Path(work_dir) if work_dir is not None else self.work_dir
@@ -36,9 +36,7 @@ class IngestService:
         extract_dir.mkdir(parents=True, exist_ok=True)
         parsed = self.parse_service.parse(source_path, source_type, str(extract_dir))
         if parsed is None:
-            raise ValueError(
-                f"Parse service returned None for {source_type} course. Check logs."
-            )
+            raise ValueError(f"Parse service returned None for {source_type} course. Check logs.")
 
         course = self.transform_service.transform(parsed, source_type, job_id)
         report = self.validation_service.validate(course, target=target_type)

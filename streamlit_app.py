@@ -13,7 +13,6 @@ from core.outputs import resolve_output_path
 from core.report import render_html_report
 from core.uploads import cleanup_expired_uploads, save_upload
 from domain.entities import Course
-from domain.enums import NodeType
 from persistence.repositories import get_job, init_db
 
 logger = logging.getLogger(__name__)
@@ -67,6 +66,7 @@ if "upload_session_id" not in st.session_state:
 if "show_report_dialog" not in st.session_state:
     st.session_state.show_report_dialog = False
 
+
 # Helper: generate HTML report (same as CLI)
 def count_node_type(nodes, target_type):
     count = 0
@@ -75,6 +75,7 @@ def count_node_type(nodes, target_type):
             count += 1
         count += count_node_type(node.children, target_type)
     return count
+
 
 def generate_html_report(job_id, job, course, report_items):
     """Delegate to the escaped, shared report renderer."""
@@ -95,6 +96,7 @@ def make_serializable(obj):
         return {key: make_serializable(value) for key, value in obj.items()}
     return obj
 
+
 # UI render helpers (work with both Pydantic models and dicts)
 def render_content_node(node, level=0):
     indent = "  " * level
@@ -114,14 +116,20 @@ def render_content_node(node, level=0):
     for child in children:
         render_content_node(child, level + 1)
 
+
 def render_structure(course):
     st.subheader("Course Content Hierarchy")
-    content_nodes = course.content_nodes if hasattr(course, "content_nodes") else course.get("content_nodes", [])
+    content_nodes = (
+        course.content_nodes
+        if hasattr(course, "content_nodes")
+        else course.get("content_nodes", [])
+    )
     if not content_nodes:
         st.info("No content nodes found.")
         return
     for node in content_nodes:
-        render_content_node(node)    
+        render_content_node(node)
+
 
 def render_warnings(report):
     if not report:
@@ -129,7 +137,9 @@ def render_warnings(report):
         return
     for note in report:
         if hasattr(note, "severity"):
-            severity = note.severity.value if hasattr(note.severity, "value") else str(note.severity)
+            severity = (
+                note.severity.value if hasattr(note.severity, "value") else str(note.severity)
+            )
             code = note.code
             message = note.message
         else:
@@ -143,8 +153,11 @@ def render_warnings(report):
         else:
             st.info(f"{code}: {message}")
 
+
 def render_assessments(course):
-    assessments = course.assessments if hasattr(course, "assessments") else course.get("assessments", [])
+    assessments = (
+        course.assessments if hasattr(course, "assessments") else course.get("assessments", [])
+    )
     questions = course.questions if hasattr(course, "questions") else course.get("questions", [])
     if not assessments:
         st.info("No assessments found.")
@@ -154,7 +167,11 @@ def render_assessments(course):
         if hasattr(ass, "title"):
             title = ass.title
             assessment_id = ass.assessment_id
-            assessment_type = ass.assessment_type.value if hasattr(ass.assessment_type, "value") else str(ass.assessment_type)
+            assessment_type = (
+                ass.assessment_type.value
+                if hasattr(ass.assessment_type, "value")
+                else str(ass.assessment_type)
+            )
             max_score = ass.max_score
         else:
             title = ass.get("title", "Untitled assessment")
@@ -164,11 +181,21 @@ def render_assessments(course):
         with st.expander(f"{title} (ID: {assessment_id})"):
             st.write(f"Type: {assessment_type}")
             st.write(f"Max Score: {max_score}")
-            linked_questions = [q for q in questions if (hasattr(q, "assessment_id") and q.assessment_id == assessment_id) or q.get("assessment_id") == assessment_id]
+            linked_questions = [
+                q
+                for q in questions
+                if (hasattr(q, "assessment_id") and q.assessment_id == assessment_id)
+                or q.get("assessment_id") == assessment_id
+            ]
             st.write(f"Questions: {len(linked_questions)}")
 
+
 def render_fragments(course):
-    fragments = course.raw_fragments if hasattr(course, "raw_fragments") else course.get("raw_fragments", [])
+    fragments = (
+        course.raw_fragments
+        if hasattr(course, "raw_fragments")
+        else course.get("raw_fragments", [])
+    )
     if not fragments:
         st.info("No raw fragments stored.")
         return
@@ -190,17 +217,35 @@ def render_fragments(course):
             else:
                 st.text("No raw text content (may be stored as binary reference).")
 
+
 def render_inspection(result):
     course = result["course"]
     report = result.get("report", [])
     raw_fragments_count = result.get("raw_fragments_count", 0)
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Course Title", course.title if hasattr(course, "title") else course.get("title", "Unknown"))
-    source_sys = course.source_system if hasattr(course, "source_system") else course.get("source_system", "")
-    col2.metric("Source System", source_sys.value if hasattr(source_sys, "value") else str(source_sys).split(".")[-1])
+    col1.metric(
+        "Course Title", course.title if hasattr(course, "title") else course.get("title", "Unknown")
+    )
+    source_sys = (
+        course.source_system
+        if hasattr(course, "source_system")
+        else course.get("source_system", "")
+    )
+    col2.metric(
+        "Source System",
+        source_sys.value if hasattr(source_sys, "value") else str(source_sys).split(".")[-1],
+    )
     col3.metric("Raw Fragments", raw_fragments_count)
-    col4.metric("Assessments", len(course.assessments if hasattr(course, "assessments") else course.get("assessments", [])))
-    col5.metric("Questions", len(course.questions if hasattr(course, "questions") else course.get("questions", [])))
+    col4.metric(
+        "Assessments",
+        len(
+            course.assessments if hasattr(course, "assessments") else course.get("assessments", [])
+        ),
+    )
+    col5.metric(
+        "Questions",
+        len(course.questions if hasattr(course, "questions") else course.get("questions", [])),
+    )
     tab1, tab2, tab3, tab4 = st.tabs(
         ["Course Structure", "Validation Warnings", "Assessments", "Raw Fragments (Sample)"]
     )
@@ -220,16 +265,21 @@ def render_inspection(result):
         data=json_str,
         file_name="inspection_report.json",
         mime="application/json",
-        key="download_inspection"
+        key="download_inspection",
     )
+
 
 # Sidebar
 with st.sidebar:
     st.header("Configuration")
-    fallback_lms = st.selectbox("Fallback Source LMS (if file extension unknown)", ["openedx", "moodle"], key="fallback_lms")
+    fallback_lms = st.selectbox(
+        "Fallback Source LMS (if file extension unknown)", ["openedx", "moodle"], key="fallback_lms"
+    )
     st.markdown("---")
     st.markdown("### Report")
-    job_id_input = st.text_input("Job ID", placeholder="Enter job ID to view report", key="job_id_input")
+    job_id_input = st.text_input(
+        "Job ID", placeholder="Enter job ID to view report", key="job_id_input"
+    )
     report_format = st.selectbox("Report format", ["json", "html"], key="report_format_selector")
     if st.button("Generate Report", key="generate_report_btn"):
         if job_id_input:
@@ -248,6 +298,7 @@ with st.sidebar:
             if key in st.session_state:
                 del st.session_state[key]
         st.rerun()
+
 
 # Report Dialog
 @st.dialog("Report for Job")
@@ -268,7 +319,7 @@ def report_dialog():
                 data=html_content,
                 file_name=f"report_{job_id}.html",
                 mime="text/html",
-                key="download_html_report_dialog"
+                key="download_html_report_dialog",
             )
         except Exception:
             logger.exception("Could not generate HTML report for job %s", job_id)
@@ -283,7 +334,7 @@ def report_dialog():
                 data=json_str,
                 file_name=f"report_{job_id}.json",
                 mime="application/json",
-                key="download_json_report_dialog"
+                key="download_json_report_dialog",
             )
         except Exception:
             logger.exception("Could not load JSON report for job %s", job_id)
@@ -292,14 +343,13 @@ def report_dialog():
         st.session_state.show_report_dialog = False
         st.rerun()
 
+
 if st.session_state.get("show_report_dialog") and st.session_state.get("report_job"):
     report_dialog()
 
 # File upload and source detection
 uploaded_file = st.file_uploader(
-    "Upload course export (.mbz or .tar.gz)",
-    type=["mbz", "tar.gz"],
-    key="course_uploader"
+    "Upload course export (.mbz or .tar.gz)", type=["mbz", "tar.gz"], key="course_uploader"
 )
 
 if uploaded_file is None:
@@ -330,6 +380,7 @@ except UploadSecurityError as exc:
 
 tmp_path = str(stored_upload.path)
 st.caption(f"Upload SHA-256: `{stored_upload.sha256}`")
+
 
 # Migration dialog
 def run_migration():
@@ -384,24 +435,33 @@ def run_migration():
         migration_json_path = reports_dir / f"migration_{job_id}.json"
         serializable_course = make_serializable(course)
         with open(migration_json_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "course": serializable_course,
-                "target_lms": target_lms,
-                "output_file": output_file,
-                "source_extracted_path": extracted_path
-            }, f, indent=2)
+            json.dump(
+                {
+                    "course": serializable_course,
+                    "target_lms": target_lms,
+                    "output_file": output_file,
+                    "source_extracted_path": extracted_path,
+                },
+                f,
+                indent=2,
+            )
         st.info(f"Migration report saved to: {migration_json_path}")
     except Exception:
         logger.exception("Migration failed for job %s", job_id)
         st.error("Migration failed. Check the server log for details.")
+
 
 @st.dialog("Migrate Course")
 def migrate_dialog():
     st.markdown("### Migration Settings")
     target_lms = st.selectbox("Target LMS", ["openedx", "moodle"], key="dialog_target_lms")
     default_filename = "export.tar.gz" if target_lms == "openedx" else "export.mbz"
-    output_filename = st.text_input("Output filename", value=default_filename, key="dialog_output_filename",
-                                    help="Name of the output file (e.g., export.tar.gz)")
+    output_filename = st.text_input(
+        "Output filename",
+        value=default_filename,
+        key="dialog_output_filename",
+        help="Name of the output file (e.g., export.tar.gz)",
+    )
     st.caption(f"Files are written to: {settings.output_dir}")
     detailed = st.checkbox("Show detailed progress", value=False, key="dialog_detailed")
     if st.button("Start Migration", key="start_migration_btn"):
@@ -409,6 +469,7 @@ def migrate_dialog():
         st.session_state.output_filename = output_filename
         st.session_state.detailed = detailed
         st.rerun()
+
 
 # Inspect and migrate buttons
 col_inspect, col_migrate = st.columns(2)
@@ -430,7 +491,9 @@ with col_migrate:
         if st.button("Migrate", type="secondary"):
             migrate_dialog()
     else:
-        st.button("Migrate", disabled=True, help="Inspect a course first", key="migrate_btn_disabled")
+        st.button(
+            "Migrate", disabled=True, help="Inspect a course first", key="migrate_btn_disabled"
+        )
 
 # Run migration after dialog closes
 if st.session_state.get("target_lms") is not None:

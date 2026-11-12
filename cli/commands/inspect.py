@@ -1,5 +1,5 @@
 """
-Course Inspector CLI – Inspect course packages and validate migration readiness.
+Course Inspector CLI - Inspect course packages and validate migration readiness.
 
 Supports:
 - Moodle (.mbz) course backups
@@ -8,10 +8,10 @@ Supports:
 Commands show course structure, transformation notes, and migration validation.
 """
 
-import logging
 import json
+import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import typer
 
@@ -21,34 +21,31 @@ from core.process_report import ProcessReporter
 
 logger = logging.getLogger(__name__)
 
+
 def inspect_command(
-        path: str = typer.Argument(
-            ..., help="Path to course file (.mbz for Moodle, .tar.gz for Open edX)"
-        ),
-        source: str = typer.Option(
-            None, "--source", "-s", help="Source LMS: 'moodle' or 'openedx' (auto-detected)"
-        ),
-        show_source: bool = typer.Option(
-            False, "--show-source", help="Show original course structure (before transformation)"
-        ),
-        validate_for: str = typer.Option(
-            None, "--validate-for", "-v", help="Validate for migration to target LMS"
-        ),
-        output: str = typer.Option(
-            None, "--output", "-o", help="Save detailed report as JSON file"
-        ),
-        verbose: bool = typer.Option(
-            False, "--verbose", "-d", help="Show everything"
-        ),
-        log_level: str = typer.Option(
-            "INFO", "--log-level", "-l", help="Console log level: DEBUG, INFO, WARNING, ERROR"
-        ),
-        log_file: str = typer.Option(
-            None, "--log-file", help="Also write a full DEBUG log to this file"
-        ),
-        report: bool = typer.Option(
-            False, "--report", "-r", help="Print a per-step success/failure report at the end"
-        ),
+    path: str = typer.Argument(
+        ..., help="Path to course file (.mbz for Moodle, .tar.gz for Open edX)"
+    ),
+    source: str = typer.Option(
+        None, "--source", "-s", help="Source LMS: 'moodle' or 'openedx' (auto-detected)"
+    ),
+    show_source: bool = typer.Option(
+        False, "--show-source", help="Show original course structure (before transformation)"
+    ),
+    validate_for: str = typer.Option(
+        None, "--validate-for", "-v", help="Validate for migration to target LMS"
+    ),
+    output: str = typer.Option(None, "--output", "-o", help="Save detailed report as JSON file"),
+    verbose: bool = typer.Option(False, "--verbose", "-d", help="Show everything"),
+    log_level: str = typer.Option(
+        "INFO", "--log-level", "-l", help="Console log level: DEBUG, INFO, WARNING, ERROR"
+    ),
+    log_file: str = typer.Option(
+        None, "--log-file", help="Also write a full DEBUG log to this file"
+    ),
+    report: bool = typer.Option(
+        False, "--report", "-r", help="Print a per-step success/failure report at the end"
+    ),
 ) -> None:
     """
     Inspect a course and show its structure, warnings, and migration readiness.
@@ -117,9 +114,10 @@ def inspect_command(
         if report:
             reporter.render()
 
-    if failed:
+    if failed or result is None:
         raise typer.Exit(1)
     typer.echo(f"\nJob ID: {result['job_id']}")
+
 
 def _detect_source(path: str) -> str:
     """
@@ -144,7 +142,7 @@ def _detect_source(path: str) -> str:
     raise typer.Exit(1)
 
 
-def _print_course_summary(course: Any, result: Dict[str, Any]) -> None:
+def _print_course_summary(course: Any, result: dict[str, Any]) -> None:
     """Print course summary statistics."""
     typer.echo("\n[ Course Summary ]")
     typer.echo(f"Course Title: {course.title}")
@@ -162,7 +160,7 @@ def _print_course_summary(course: Any, result: Dict[str, Any]) -> None:
     typer.echo(f"Raw Fragments: {result['raw_fragments_count']}")
 
 
-def _print_original_structure(parsed: Dict[str, Any], source: str) -> None:
+def _print_original_structure(parsed: dict[str, Any], source: str) -> None:
     """Print original course structure before transformation."""
     typer.echo(f"\n[ Original Structure ({source.title()}) ]")
 
@@ -172,7 +170,7 @@ def _print_original_structure(parsed: Dict[str, Any], source: str) -> None:
         _print_openedx_raw_structure(parsed)
 
 
-def _print_moodle_raw_structure(parsed: Dict[str, Any]) -> None:
+def _print_moodle_raw_structure(parsed: dict[str, Any]) -> None:
     """Print Moodle course raw structure (sections, activities, or chapters)."""
     sections = parsed.get("sections", [])
     activities = parsed.get("activities", [])
@@ -206,7 +204,7 @@ def _print_moodle_raw_structure(parsed: Dict[str, Any]) -> None:
         typer.echo("  No sections, activities, or chapters found")
 
 
-def _print_openedx_raw_structure(parsed: Dict[str, Any]) -> None:
+def _print_openedx_raw_structure(parsed: dict[str, Any]) -> None:
     """Print Open edX course raw structure (chapters -> sequentials -> verticals)."""
     chapters = parsed.get("chapters", [])
 
@@ -238,9 +236,7 @@ def _print_transformed_structure(course: Any, validate_for: str) -> None:
 def _print_node_tree(node: Any, indent: int = 0) -> None:
     """Recursively print content node tree with indentation."""
     prefix = "  " * indent
-    node_type = (
-        node.node_type.value if hasattr(node.node_type, "value") else node.node_type
-    )
+    node_type = node.node_type.value if hasattr(node.node_type, "value") else node.node_type
     title = node.title or "Untitled"
     typer.echo(f"{prefix}- {node_type}: {title}")
 
@@ -248,7 +244,7 @@ def _print_node_tree(node: Any, indent: int = 0) -> None:
         _print_node_tree(child, indent + 1)
 
 
-def _print_validation_notes(result: Dict[str, Any], validate_for: str) -> None:
+def _print_validation_notes(result: dict[str, Any], validate_for: str) -> None:
     """Print validation notes and migration readiness status."""
     notes = result.get("report", [])
 
@@ -262,7 +258,7 @@ def _print_validation_notes(result: Dict[str, Any], validate_for: str) -> None:
         _print_validation_notes_only(notes)
 
 
-def _print_validation_for_migration(notes: List[Any], validate_for: str) -> None:
+def _print_validation_for_migration(notes: list[Any], validate_for: str) -> None:
     """Print validation notes with migration readiness summary."""
     typer.echo(f"\n[ Validation for {validate_for.title()} Migration ]")
 
@@ -274,16 +270,13 @@ def _print_validation_for_migration(notes: List[Any], validate_for: str) -> None
     warning_count = sum(
         1
         for n in notes
-        if (n.severity.value if hasattr(n.severity, "value") else n.severity)
-        == "warning"
+        if (n.severity.value if hasattr(n.severity, "value") else n.severity) == "warning"
     )
 
     typer.echo(f"Errors: {error_count}, Warnings: {warning_count}")
 
     for note in notes:
-        severity = (
-            note.severity.value if hasattr(note.severity, "value") else str(note.severity)
-        )
+        severity = note.severity.value if hasattr(note.severity, "value") else str(note.severity)
         typer.echo(f"  [{severity}] {note.code}: {note.message}")
 
     # Print migration readiness summary
@@ -297,18 +290,16 @@ def _print_validation_for_migration(notes: List[Any], validate_for: str) -> None
         typer.echo(f"\nMigration to {validate_for} should work flawlessly.")
 
 
-def _print_validation_notes_only(notes: List[Any]) -> None:
+def _print_validation_notes_only(notes: list[Any]) -> None:
     """Print validation notes without migration summary."""
     typer.echo("\n[ Validation Notes ]")
 
     for note in notes:
-        severity = (
-            note.severity.value if hasattr(note.severity, "value") else str(note.severity)
-        )
+        severity = note.severity.value if hasattr(note.severity, "value") else str(note.severity)
         typer.echo(f"  [{severity}] {note.code}: {note.message}")
 
 
-def _save_output(result: Dict[str, Any], output_path: str) -> None:
+def _save_output(result: dict[str, Any], output_path: str) -> None:
     """Save inspection result as JSON file."""
     output_data = _make_serializable(result)
 

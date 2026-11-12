@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# Types and error passthrough only; untrusted parsing uses defusedxml.
+from xml.etree.ElementTree import Element, ParseError  # nosec B405
+
 from defusedxml import ElementTree as DefusedElementTree
 from defusedxml.common import DefusedXmlException
-from xml.etree.ElementTree import Element, ParseError
 
 from core.config import get_settings
 from core.errors import XmlSecurityError
@@ -34,9 +36,7 @@ def _check_depth(root: Element, limit: int, source: str) -> None:
     while stack:
         node, depth = stack.pop()
         if depth > limit:
-            raise XmlSecurityError(
-                f"XML nesting exceeds {limit} levels: {source!r}"
-            )
+            raise XmlSecurityError(f"XML nesting exceeds {limit} levels: {source!r}")
         stack.extend((child, depth + 1) for child in node)
 
 
@@ -95,9 +95,7 @@ def parse_xml_file(
     except OSError:
         raise
     if size > limit:
-        raise XmlSecurityError(
-            f"XML file exceeds {limit} bytes: {str(xml_path)!r} ({size} bytes)"
-        )
+        raise XmlSecurityError(f"XML file exceeds {limit} bytes: {str(xml_path)!r} ({size} bytes)")
     return parse_xml_bytes(
         xml_path.read_bytes(),
         source=str(xml_path),

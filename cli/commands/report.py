@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-from typing import Any
 
 import typer
 
@@ -31,7 +30,7 @@ def report_command(
         report_items = json.loads(job.get("report_json") or "[]")
     except Exception as exc:
         typer.echo(f"Error: Could not load report data for {job_id}: {exc}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from exc
 
     report_format = format.strip().lower()
     if report_format == "json":

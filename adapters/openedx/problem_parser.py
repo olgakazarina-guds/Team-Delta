@@ -1,5 +1,5 @@
 """
-Open edX Problem Parser – Parses problem XMLs into structured question dicts.
+Open edX Problem Parser - Parses problem XMLs into structured question dicts.
 
 Extracts questions from Open edX problem XMLs supporting:
 multiplechoiceresponse (multichoice, truefalse)
@@ -10,14 +10,16 @@ textinput / numericalinput (legacy custom markup)
 formularesponse, coderesponse, customresponse (placeholders)
 """
 
-import xml.etree.ElementTree as ET
 import uuid
-from typing import Dict, Any, List, Optional
+
+# XML generation and passthrough only; untrusted parsing goes through core.xml_utils.
+import xml.etree.ElementTree as ET  # nosec B405
+from typing import Any
 
 from core.xml_utils import parse_xml_text
 
 
-def parse_problem(problem_xml: str, problem_url_name: str) -> Dict[str, Any]:
+def parse_problem(problem_xml: str, problem_url_name: str) -> dict[str, Any]:
     """
     Parse an Open edX problem XML and return a structured dict with questions.
 
@@ -44,24 +46,24 @@ def parse_problem(problem_xml: str, problem_url_name: str) -> Dict[str, Any]:
     """
     root = parse_xml_text(problem_xml, source=f"problem:{problem_url_name}")
     display_name = root.attrib.get("display_name", f"Problem: {problem_url_name}")
-    questions: List[Dict[str, Any]] = []
+    questions: list[dict[str, Any]] = []
 
-    # 1. Multiple Choice / True-False – <multiplechoiceresponse>
+    # 1. Multiple Choice / True-False - <multiplechoiceresponse>
     questions.extend(_parse_multiple_choice_responses(root))
 
-    # 2. Multiple Choice (legacy) – <choiceresponse>
+    # 2. Multiple Choice (legacy) - <choiceresponse>
     questions.extend(_parse_choice_responses(root))
 
-    # 3. Short Answer – <stringresponse>
+    # 3. Short Answer - <stringresponse>
     questions.extend(_parse_string_responses(root))
 
-    # 4. Legacy custom short answer – <textinput>
+    # 4. Legacy custom short answer - <textinput>
     questions.extend(_parse_text_inputs(root))
 
-    # 5. Numerical – <numericalresponse> / legacy <numericalinput>
+    # 5. Numerical - <numericalresponse> / legacy <numericalinput>
     questions.extend(_parse_numerical_inputs(root))
 
-    # 6. Formula, Code, Custom – placeholders
+    # 6. Formula, Code, Custom - placeholders
     questions.extend(_parse_formula_responses(root))
     questions.extend(_parse_code_responses(root))
     questions.extend(_parse_custom_responses(root))
@@ -72,7 +74,7 @@ def parse_problem(problem_xml: str, problem_url_name: str) -> Dict[str, Any]:
     }
 
 
-def _parse_multiple_choice_responses(root: ET.Element) -> List[Dict[str, Any]]:
+def _parse_multiple_choice_responses(root: ET.Element) -> list[dict[str, Any]]:
     """
     Parse <multiplechoiceresponse> elements (multichoice or truefalse).
 
@@ -81,18 +83,14 @@ def _parse_multiple_choice_responses(root: ET.Element) -> List[Dict[str, Any]]:
     questions = []
     for multiresp in root.findall(".//multiplechoiceresponse"):
         label_elem = multiresp.find("label")
-        prompt = (
-            label_elem.text.strip()
-            if label_elem is not None and label_elem.text
-            else ""
-        )
+        prompt = label_elem.text.strip() if label_elem is not None and label_elem.text else ""
 
         choicegroup = multiresp.find("choicegroup")
         if choicegroup is None:
             continue
 
         choices = choicegroup.findall("choice")
-        answer_options = []
+        answer_options: list[dict[str, Any]] = []
         for choice in choices:
             text = choice.text.strip() if choice.text else ""
             is_correct = choice.attrib.get("correct", "false").lower() == "true"
@@ -106,21 +104,21 @@ def _parse_multiple_choice_responses(root: ET.Element) -> List[Dict[str, Any]]:
             else "multichoice"
         )
 
-        questions.append({
-            "question_id": str(uuid.uuid4()),
-            "type": q_type,
-            "prompt": prompt,
-            "points": 1.0,
-            "answer_options": answer_options,
-            "correct_answers": [
-                opt["text"] for opt in answer_options if opt["is_correct"]
-            ],
-        })
+        questions.append(
+            {
+                "question_id": str(uuid.uuid4()),
+                "type": q_type,
+                "prompt": prompt,
+                "points": 1.0,
+                "answer_options": answer_options,
+                "correct_answers": [opt["text"] for opt in answer_options if opt["is_correct"]],
+            }
+        )
 
     return questions
 
 
-def _parse_choice_responses(root: ET.Element) -> List[Dict[str, Any]]:
+def _parse_choice_responses(root: ET.Element) -> list[dict[str, Any]]:
     """
     Parse legacy <choiceresponse> elements (single-select or multi-select).
 
@@ -158,21 +156,21 @@ def _parse_choice_responses(root: ET.Element) -> List[Dict[str, Any]]:
             answer_options.append({"text": text, "is_correct": is_correct})
 
         if answer_options:
-            questions.append({
-                "question_id": str(uuid.uuid4()),
-                "type": q_type,
-                "prompt": prompt,
-                "points": 1.0,
-                "answer_options": answer_options,
-                "correct_answers": [
-                    opt["text"] for opt in answer_options if opt["is_correct"]
-                ],
-            })
+            questions.append(
+                {
+                    "question_id": str(uuid.uuid4()),
+                    "type": q_type,
+                    "prompt": prompt,
+                    "points": 1.0,
+                    "answer_options": answer_options,
+                    "correct_answers": [opt["text"] for opt in answer_options if opt["is_correct"]],
+                }
+            )
 
     return questions
 
 
-def _parse_string_responses(root: ET.Element) -> List[Dict[str, Any]]:
+def _parse_string_responses(root: ET.Element) -> list[dict[str, Any]]:
     """
     Parse standard <stringresponse> elements (text input questions).
 
@@ -183,11 +181,7 @@ def _parse_string_responses(root: ET.Element) -> List[Dict[str, Any]]:
     questions = []
     for stringresponse in root.findall(".//stringresponse"):
         label_elem = stringresponse.find("label")
-        prompt = (
-            label_elem.text.strip()
-            if label_elem is not None and label_elem.text
-            else ""
-        )
+        prompt = label_elem.text.strip() if label_elem is not None and label_elem.text else ""
 
         correct_answers = []
         primary = stringresponse.attrib.get("answer")
@@ -203,59 +197,53 @@ def _parse_string_responses(root: ET.Element) -> List[Dict[str, Any]]:
 
         points = float(stringresponse.attrib.get("points", 1.0))
 
-        questions.append({
-            "question_id": str(uuid.uuid4()),
-            "type": "shortanswer",
-            "prompt": prompt,
-            "points": points,
-            "correct_answers": correct_answers,
-            "answer_options": [],
-        })
+        questions.append(
+            {
+                "question_id": str(uuid.uuid4()),
+                "type": "shortanswer",
+                "prompt": prompt,
+                "points": points,
+                "correct_answers": correct_answers,
+                "answer_options": [],
+            }
+        )
 
     return questions
 
 
-def _parse_text_inputs(root: ET.Element) -> List[Dict[str, Any]]:
+def _parse_text_inputs(root: ET.Element) -> list[dict[str, Any]]:
     """Parse legacy custom <textinput> elements (shortanswer questions)."""
     questions = []
     for textinput in root.findall(".//textinput"):
         label_elem = textinput.find("label")
-        prompt = (
-            label_elem.text.strip()
-            if label_elem is not None and label_elem.text
-            else ""
-        )
+        prompt = label_elem.text.strip() if label_elem is not None and label_elem.text else ""
 
         response = textinput.find("response")
         correct_answer = ""
         if response is not None:
             correct_answer = response.attrib.get("correct_answer", "")
 
-        questions.append({
-            "question_id": str(uuid.uuid4()),
-            "type": "shortanswer",
-            "prompt": prompt,
-            "points": 1.0,
-            "correct_answers": [correct_answer] if correct_answer else [],
-            "answer_options": [],
-        })
+        questions.append(
+            {
+                "question_id": str(uuid.uuid4()),
+                "type": "shortanswer",
+                "prompt": prompt,
+                "points": 1.0,
+                "correct_answers": [correct_answer] if correct_answer else [],
+                "answer_options": [],
+            }
+        )
 
     return questions
 
 
-def _parse_numerical_inputs(root: ET.Element) -> List[Dict[str, Any]]:
+def _parse_numerical_inputs(root: ET.Element) -> list[dict[str, Any]]:
     """Parse standard <numericalresponse> and legacy <numericalinput> elements."""
     questions = []
-    elements = root.findall(".//numericalresponse") + root.findall(
-        ".//numericalinput"
-    )
+    elements = root.findall(".//numericalresponse") + root.findall(".//numericalinput")
     for element in elements:
         label_elem = element.find("label")
-        prompt = (
-            label_elem.text.strip()
-            if label_elem is not None and label_elem.text
-            else ""
-        )
+        prompt = label_elem.text.strip() if label_elem is not None and label_elem.text else ""
 
         correct_answer = element.attrib.get("answer", "")
         if not correct_answer:
@@ -263,55 +251,63 @@ def _parse_numerical_inputs(root: ET.Element) -> List[Dict[str, Any]]:
             if response is not None:
                 correct_answer = response.attrib.get("correct_answer", "")
 
-        questions.append({
-            "question_id": str(uuid.uuid4()),
-            "type": "numerical",
-            "prompt": prompt,
-            "points": 1.0,
-            "correct_answer": correct_answer,
-            "answer_options": [],
-        })
+        questions.append(
+            {
+                "question_id": str(uuid.uuid4()),
+                "type": "numerical",
+                "prompt": prompt,
+                "points": 1.0,
+                "correct_answer": correct_answer,
+                "answer_options": [],
+            }
+        )
 
     return questions
 
 
-def _parse_formula_responses(root: ET.Element) -> List[Dict[str, Any]]:
-    """Parse <formularesponse> elements (placeholder – not fully converted)."""
+def _parse_formula_responses(root: ET.Element) -> list[dict[str, Any]]:
+    """Parse <formularesponse> elements (placeholder - not fully converted)."""
     questions = []
     for _ in root.findall(".//formularesponse"):
-        questions.append({
-            "question_id": str(uuid.uuid4()),
-            "type": "formula",
-            "prompt": "Formula response (not fully converted)",
-            "points": 1.0,
-            "answer_options": [],
-        })
+        questions.append(
+            {
+                "question_id": str(uuid.uuid4()),
+                "type": "formula",
+                "prompt": "Formula response (not fully converted)",
+                "points": 1.0,
+                "answer_options": [],
+            }
+        )
     return questions
 
 
-def _parse_code_responses(root: ET.Element) -> List[Dict[str, Any]]:
-    """Parse <coderesponse> elements (placeholder – not fully converted)."""
+def _parse_code_responses(root: ET.Element) -> list[dict[str, Any]]:
+    """Parse <coderesponse> elements (placeholder - not fully converted)."""
     questions = []
     for _ in root.findall(".//coderesponse"):
-        questions.append({
-            "question_id": str(uuid.uuid4()),
-            "type": "code",
-            "prompt": "Code response (not fully converted)",
-            "points": 1.0,
-            "answer_options": [],
-        })
+        questions.append(
+            {
+                "question_id": str(uuid.uuid4()),
+                "type": "code",
+                "prompt": "Code response (not fully converted)",
+                "points": 1.0,
+                "answer_options": [],
+            }
+        )
     return questions
 
 
-def _parse_custom_responses(root: ET.Element) -> List[Dict[str, Any]]:
-    """Parse <customresponse> elements (placeholder – not fully converted)."""
+def _parse_custom_responses(root: ET.Element) -> list[dict[str, Any]]:
+    """Parse <customresponse> elements (placeholder - not fully converted)."""
     questions = []
     for _ in root.findall(".//customresponse"):
-        questions.append({
-            "question_id": str(uuid.uuid4()),
-            "type": "custom",
-            "prompt": "Custom response (not fully converted)",
-            "points": 1.0,
-            "answer_options": [],
-        })
+        questions.append(
+            {
+                "question_id": str(uuid.uuid4()),
+                "type": "custom",
+                "prompt": "Custom response (not fully converted)",
+                "points": 1.0,
+                "answer_options": [],
+            }
+        )
     return questions

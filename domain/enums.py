@@ -1,5 +1,5 @@
 """
-Domain Enums – Type-safe enumerations for the course migration system.
+Domain Enums - Type-safe enumerations for the course migration system.
 
 Defines all enum types used across domain entities:
 - Severity: For mapping notes and validation
@@ -9,10 +9,10 @@ Defines all enum types used across domain entities:
 - FragmentKind: For raw fragment content types
 """
 
-from enum import Enum
+from enum import StrEnum
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     """
     Severity levels for mapping notes and validation messages.
     """
@@ -22,7 +22,7 @@ class Severity(str, Enum):
     ERROR = "error"
 
 
-class SourceSystem(str, Enum):
+class SourceSystem(StrEnum):
     """
     Source LMS platforms that can be migrated from.
     """
@@ -31,7 +31,7 @@ class SourceSystem(str, Enum):
     MOODLE = "moodle"
 
 
-class NodeType(str, Enum):
+class NodeType(StrEnum):
     """
     Content node types in the course hierarchy.
 
@@ -57,7 +57,7 @@ class NodeType(str, Enum):
     UNKNOWN = "unknown"
 
 
-class AssessmentType(str, Enum):
+class AssessmentType(StrEnum):
     """
     Assessment categories in the canonical model.
     """
@@ -67,7 +67,7 @@ class AssessmentType(str, Enum):
     ASSIGNMENT = "assignment"
 
 
-class FragmentKind(str, Enum):
+class FragmentKind(StrEnum):
     """
     Content types for raw fragments (source XML fragments).
     """

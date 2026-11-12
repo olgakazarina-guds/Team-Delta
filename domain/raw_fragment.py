@@ -1,5 +1,5 @@
 """
-Raw Fragment Entities – Source provenance tracking for course migration.
+Raw Fragment Entities - Source provenance tracking for course migration.
 
 Tracks original source XML fragments for:
 Auditing and debugging
@@ -8,7 +8,6 @@ Linking canonical entities back to source files
 """
 
 from pydantic import BaseModel
-from typing import Optional
 
 from .enums import FragmentKind, SourceSystem
 
@@ -21,10 +20,10 @@ class SourceLocation(BaseModel):
     """
 
     source_system: SourceSystem
-    package_path: Optional[str] = None  # Path relative to package root
-    file_path: Optional[str] = None  # Absolute file path
-    node_id: Optional[str] = None  # Node ID within the file
-    xpath: Optional[str] = None  # XPath within XML file
+    package_path: str | None = None  # Path relative to package root
+    file_path: str | None = None  # Absolute file path
+    node_id: str | None = None  # Node ID within the file
+    xpath: str | None = None  # XPath within XML file
 
 
 class RawFragment(BaseModel):
@@ -38,6 +37,6 @@ class RawFragment(BaseModel):
     fragment_id: str
     kind: FragmentKind
     source_location: SourceLocation
-    raw_text: Optional[str] = None  # Small text fragments (inline)
-    raw_bytes_ref: Optional[str] = None  # File path for large/binary content
-    checksum: Optional[str] = None  # SHA-1 or MD5 hash for integrity
+    raw_text: str | None = None  # Small text fragments (inline)
+    raw_bytes_ref: str | None = None  # File path for large/binary content
+    checksum: str | None = None  # SHA-1 or MD5 hash for integrity

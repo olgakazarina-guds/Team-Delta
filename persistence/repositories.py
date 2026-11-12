@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any
 
 from core.config import get_settings
 from core.errors import JobAccessError
@@ -67,9 +68,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    existing = {
-        row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
-    }
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
     for name, definition in _REQUIRED_COLUMNS.items():
         if name not in existing:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {definition}")
@@ -106,7 +105,7 @@ def save_job(
     target_type: str,
     course: Any,
     report: list,
-    extracted_path: Optional[str] = None,
+    extracted_path: str | None = None,
     *,
     status: str = "inspected",
     owner: str = DEFAULT_OWNER,
@@ -114,9 +113,7 @@ def save_job(
     """Save a newly inspected job and its canonical course snapshot."""
     init_db()
     with _connect() as conn:
-        existing = conn.execute(
-            "SELECT owner FROM jobs WHERE job_id = ?", (job_id,)
-        ).fetchone()
+        existing = conn.execute("SELECT owner FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
         if existing and existing["owner"] != owner:
             raise JobAccessError(f"Job {job_id} belongs to another owner")
         conn.execute(
@@ -155,8 +152,8 @@ def save_migration_job(
     target_type: str,
     course: Any,
     report: list,
-    extracted_path: Optional[str] = None,
-    output_path: Optional[str] = None,
+    extracted_path: str | None = None,
+    output_path: str | None = None,
     *,
     owner: str = DEFAULT_OWNER,
 ) -> None:
@@ -210,9 +207,7 @@ def save_migration_job(
         conn.commit()
 
 
-def mark_job_failed(
-    job_id: str, error: str, *, owner: Optional[str] = None
-) -> None:
+def mark_job_failed(job_id: str, error: str, *, owner: str | None = None) -> None:
     """Record a terminal failure without discarding the stored course snapshot."""
     init_db()
     with _connect() as conn:
@@ -237,7 +232,7 @@ def mark_job_failed(
         conn.commit()
 
 
-def get_job(job_id: str, *, owner: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def get_job(job_id: str, *, owner: str | None = None) -> dict[str, Any] | None:
     """Retrieve a job by ID, optionally constrained to its owner."""
     init_db()
     with _connect() as conn:
@@ -264,9 +259,7 @@ def get_job(job_id: str, *, owner: Optional[str] = None) -> Optional[Dict[str, A
     return dict(row) if row else None
 
 
-def list_jobs(
-    limit: int = 100, *, owner: Optional[str] = None
-) -> List[Dict[str, Any]]:
+def list_jobs(limit: int = 100, *, owner: str | None = None) -> list[dict[str, Any]]:
     """Return recent jobs without loading the potentially large course JSON."""
     init_db()
     with _connect() as conn:
@@ -296,7 +289,7 @@ def list_jobs(
     return [dict(row) for row in rows]
 
 
-def delete_job(job_id: str, *, owner: Optional[str] = None) -> bool:
+def delete_job(job_id: str, *, owner: str | None = None) -> bool:
     """Delete a job. Returns whether a row was removed."""
     init_db()
     with _connect() as conn:

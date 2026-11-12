@@ -9,14 +9,10 @@ from persistence.repositories import get_job
 
 
 def _inspect(archive: Path, source_type: str, owner: str = "alice") -> dict:
-    return IngestService(owner=owner).inspect(
-        str(archive), source_type=source_type
-    )
+    return IngestService(owner=owner).inspect(str(archive), source_type=source_type)
 
 
-def test_migrate_openedx_to_moodle_updates_job(
-    openedx_archive: Path, tmp_path: Path
-):
+def test_migrate_openedx_to_moodle_updates_job(openedx_archive: Path, tmp_path: Path):
     inspected = _inspect(openedx_archive, "openedx")
     output = tmp_path / "converted.mbz"
 
@@ -38,9 +34,7 @@ def test_migrate_openedx_to_moodle_updates_job(
     assert job["error"] is None
 
 
-def test_migrate_moodle_to_openedx_updates_job(
-    moodle_archive: Path, tmp_path: Path
-):
+def test_migrate_moodle_to_openedx_updates_job(moodle_archive: Path, tmp_path: Path):
     inspected = _inspect(moodle_archive, "moodle")
     output = tmp_path / "converted.tar.gz"
 
@@ -106,9 +100,7 @@ def test_migration_marks_job_failed_when_target_adapter_raises(
     assert "RuntimeError: target adapter exploded" in job["error"]
 
 
-def test_migration_rejects_job_owned_by_another_user(
-    openedx_archive: Path, tmp_path: Path
-):
+def test_migration_rejects_job_owned_by_another_user(openedx_archive: Path, tmp_path: Path):
     inspected = _inspect(openedx_archive, "openedx", owner="alice")
 
     with pytest.raises(JobAccessError):

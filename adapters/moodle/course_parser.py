@@ -19,45 +19,46 @@ Usage:
 """
 
 import logging
-import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.archive_utils import resolve_under
 from core.errors import SecurityError
 from core.identity import sha256_bytes, stable_id
-from .backup_reader import MoodleBackupReader
 from domain.enums import NodeType
 
+from .backup_reader import MoodleBackupReader
+
 logger = logging.getLogger(__name__)
+
 
 class MoodleCourseParser:
     """
     Two-phase Moodle source adapter for parsing .mbz backup files.
-    
+
     Parses Moodle course backups into a canonical dictionary representation
     that can be transformed into Open edX format. Extracts course metadata,
     sections, activities, assessments, questions, and assets.
     """
-    
+
     def __init__(self):
         """Initialize the parser with a MoodleBackupReader and empty fragments list."""
         self.reader = MoodleBackupReader()
-        self.fragments: List[Dict[str, Any]] = []
+        self.fragments: list[dict[str, Any]] = []
         self._course_key = ""
 
-    def parse(self, mbz_path: str, work_dir: str) -> Dict[str, Any]:
+    def parse(self, mbz_path: str, work_dir: str) -> dict[str, Any]:
         """
         Parse a Moodle .mbz backup file into a canonical course dictionary.
-        
+
         Extracts the archive, reads the manifest, parses course metadata from
         course/course.xml, and walks all sections and activities to build a
         complete course representation.
-        
+
         Args:
             mbz_path: Path to the .mbz backup file
             work_dir: Temporary directory for extracted archive contents
-            
+
         Returns:
             Dictionary containing:
             - course_id: Moodle internal course ID (string)
@@ -69,7 +70,7 @@ class MoodleCourseParser:
             - assessments: List of quiz assessment dicts from activities
             - assets: List of resource file asset dicts
             - raw_fragments: All XML fragment dicts collected during parsing
-            
+
         Example:
             >>> parser = MoodleCourseParser()
             >>> course_dict = parser.parse("course.mbz", "/tmp/extract")
@@ -89,7 +90,7 @@ class MoodleCourseParser:
         course_id = ""
 
         # Step 2: Read course/course.xml for authoritative metadata
-        # The manifest header snapshot may be stale if the course was renamed 
+        # The manifest header snapshot may be stale if the course was renamed
         # after backup, so course/course.xml is the authoritative source.
         course_root = self.reader.read_xml(extracted, "course/course.xml")
         if course_root is not None:
@@ -102,10 +103,10 @@ class MoodleCourseParser:
         self._course_key = f"moodle:{course_id or course_shortname or course_title}"
 
         # Step 3: Initialize containers for course data
-        sections: List[Dict[str, Any]] = []
-        assessments: List[Dict[str, Any]] = []
-        assets: List[Dict[str, Any]] = []
-        
+        sections: list[dict[str, Any]] = []
+        assessments: list[dict[str, Any]] = []
+        assets: list[dict[str, Any]] = []
+
         # Step 4: Load question bank assessments from questions.xml
         questions_assessments = self._load_questions(extracted)
 
@@ -133,22 +134,22 @@ class MoodleCourseParser:
     def _parse_section(
         self,
         extracted: Path,
-        section_info: Dict[str, Any],
-        manifest: Dict[str, Any],
+        section_info: dict[str, Any],
+        manifest: dict[str, Any],
         pos: int,
-        assessments: List,
-        assets: List,
-    ) -> Optional[Dict[str, Any]]:
+        assessments: list,
+        assets: list,
+    ) -> dict[str, Any] | None:
         """
         Parse one Moodle section directory into a section dictionary.
-        
+
         Parses section.xml to extract section metadata and resolves all
         activities referenced in the <sequence> field using the manifest
         activity lookup table.
-        
+
         Moodle uses '$@NULL@$' for numbered topics with no custom title.
         These are treated as empty and receive a positional fallback title.
-        
+
         Args:
             extracted: Path to extracted .mbz directory
             section_info: Section metadata from manifest
@@ -156,7 +157,7 @@ class MoodleCourseParser:
             pos: Zero-based section position (preserves manifest order)
             assessments: Shared list to append quiz assessments to
             assets: Shared list to append resource assets to
-            
+
         Returns:
             Section dictionary with:
             - section_id: Moodle internal section ID
@@ -164,7 +165,7 @@ class MoodleCourseParser:
             - position: Zero-based index
             - raw_fragment_id: ID of stored section.xml fragment
             - activities: Ordered list of activity dicts for this section
-            
+
             Returns None if section.xml is missing or unreadable.
         """
         directory = section_info["directory"]
@@ -181,7 +182,7 @@ class MoodleCourseParser:
             title = f"Section {pos + 1}"
 
         section_id = root.findtext("id", section_info.get("section_id", ""))
-        
+
         # Parse comma-separated cmids from <sequence> field
         sequence_text = root.findtext("sequence", "")
         cmids = [c.strip() for c in sequence_text.split(",") if c.strip() and c.strip() != "0"]
@@ -189,7 +190,7 @@ class MoodleCourseParser:
         frag_id = self._store_fragment(extracted, section_xml_path)
 
         # Parse all activities referenced in this section
-        activities: List[Dict[str, Any]] = []
+        activities: list[dict[str, Any]] = []
         for cmid in cmids:
             activity_information = manifest["activities"].get(cmid)
             if not activity_information:
@@ -211,31 +212,31 @@ class MoodleCourseParser:
     def _parse_activity(
         self,
         extracted: Path,
-        activity_info: Dict[str, Any],
-        manifest: Dict[str, Any],
-        assessments: List,
-        assets: List,
-    ) -> Optional[Dict[str, Any]]:
+        activity_info: dict[str, Any],
+        manifest: dict[str, Any],
+        assessments: list,
+        assets: list,
+    ) -> dict[str, Any] | None:
         """
         Parse a Moodle activity by delegating to module-specific parsers.
-        
+
         Resolves an activity by module type (page, label, quiz, etc.) and
         calls the appropriate parser. Returns a dict with at minimum:
         cmid, module_name, title, raw_fragment_id, node_type.
-        
+
         Type-specific parsers add further keys (content_html, assessment_id,
         metadata, etc.). If the XML is missing, module is unrecognized, or
         the parser raises an exception, returns NodeType.UNKNOWN rather than
         propagating the error - this ensures one malformed activity doesn't
         abort the entire course parse.
-        
+
         Args:
             extracted: Path to extracted .mbz directory
             activity_info: Activity metadata from manifest
             manifest: Full parsed manifest
             assessments: Shared list to append quiz assessments to
             assets: Shared list to append resource assets to
-            
+
         Returns:
             Activity dictionary with module-specific fields, or None on failure
         """
@@ -247,7 +248,7 @@ class MoodleCourseParser:
         frag_id = self._store_fragment(extracted, activity_xml_path) if root is not None else None
 
         # Base activity dict (always included)
-        base: Dict[str, Any] = {
+        base: dict[str, Any] = {
             "cmid": activity_info["cmid"],
             "module_name": module_name,
             "title": activity_info.get("title", ""),
@@ -281,7 +282,9 @@ class MoodleCourseParser:
 
         # Call module-specific parser with graceful error handling
         try:
-            result = dispatch[module_name](root, activity_info, extracted, manifest, assessments, assets)
+            result = dispatch[module_name](
+                root, activity_info, extracted, manifest, assessments, assets
+            )
         except SecurityError:
             raise
         except Exception as exc:
@@ -305,23 +308,21 @@ class MoodleCourseParser:
     # Activity Parsers - return None on failure
     # -------------------------------------------------------------------------
 
-    def _parse_page(
-        self, root, activity_info, extracted, manifest, assessments, assets
-    ):
+    def _parse_page(self, root, activity_info, extracted, manifest, assessments, assets):
         """
         Parse a Moodle 'page' activity.
-        
+
         Pages have two HTML fields: intro (shown in course outline) and content
         (full page body). Both are joined into a single content_html string.
-        
+
         Note: ElementTree automatically unescapes HTML entities in CDATA sections,
         so do not call html.unescape() again or entities will be double-decoded.
-        
+
         Args:
             root: Parsed XML root element
             activity_info: Activity metadata from manifest
             extracted, manifest, assessments, assets: Unused but required for interface consistency
-            
+
         Returns:
             Dictionary with title, node_type=PAGE, and content_html
         """
@@ -341,19 +342,17 @@ class MoodleCourseParser:
             "metadata": {"intro_html": intro if content.strip() else ""},
         }
 
-    def _parse_label(
-        self, root, activity_info, extracted, manifest, assessments, assets
-    ):
+    def _parse_label(self, root, activity_info, extracted, manifest, assessments, assets):
         """
         Parse a Moodle 'label' activity.
-        
+
         Labels are inline HTML snippets embedded directly in the course outline.
         Unlike pages, they have only an intro field and no separate content body.
-        
+
         Args:
             root: Parsed XML root element
             activity_info: Activity metadata from manifest
-            
+
         Returns:
             Dictionary with title, node_type=HTML, and content_html (intro only)
         """
@@ -364,15 +363,20 @@ class MoodleCourseParser:
         intro = inner.findtext("intro", "")
         # Check if intro contains a YouTube link
         import re
-        youtube_pattern = r'(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})'
+
+        youtube_pattern = r"(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})"
         match = re.search(youtube_pattern, intro)
         if match:
             youtube_id = match.group(1)
             return {
                 "title": title,
                 "node_type": NodeType.VIDEO.value,
-                "metadata": {"activity_type": "youtube", "youtube_id": youtube_id, "externalurl": match.group(0)},
-                "content_html": intro  # Keep original as fallback
+                "metadata": {
+                    "activity_type": "youtube",
+                    "youtube_id": youtube_id,
+                    "externalurl": match.group(0),
+                },
+                "content_html": intro,  # Keep original as fallback
             }
         else:
             return {
@@ -381,42 +385,41 @@ class MoodleCourseParser:
                 "content_html": intro,
             }
 
-    def _parse_url(
-        self, root, activity_info, extracted, manifest, assessments, assets
-    ):
+    def _parse_url(self, root, activity_info, extracted, manifest, assessments, assets):
         """
         Parse a Moodle 'url' activity.
-        
+
         External URLs are stored in the <externalurl> element. If the URL points
         to YouTube, we extract the video ID and mark it as a VIDEO component.
-        
+
         Args:
             root: Parsed XML root element
             activity_info: Activity metadata from manifest
-            
+
         Returns:
             Dictionary with title, node_type (VIDEO or ACTIVITY), and metadata
         """
         import re
+
         inner = root.find("url")
         if inner is None:
             inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         url = inner.findtext("externalurl", "")
-        
+
         # Detect YouTube URLs and extract video ID
         youtube_id = None
         youtube_patterns = [
             r"(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})",
             r"(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})",
         ]
-        
+
         for pattern in youtube_patterns:
             match = re.search(pattern, url)
             if match:
                 youtube_id = match.group(1)
                 break
-        
+
         if youtube_id:
             return {
                 "title": title,
@@ -427,27 +430,24 @@ class MoodleCourseParser:
                     "externalurl": url,
                 },
             }
-        
+
         return {
             "title": title,
             "node_type": NodeType.ACTIVITY.value,
             "metadata": {"activity_type": "url", "externalurl": url},
         }
 
-
-    def _parse_forum(
-        self, root, activity_info, extracted, manifest, assessments, assets
-    ):
+    def _parse_forum(self, root, activity_info, extracted, manifest, assessments, assets):
         """
         Parse a Moodle 'forum' activity.
-        
+
         For MVP conversion purposes, only the forum name and intro HTML are captured.
         Individual posts and threads are not included in a standard .mbz backup.
-        
+
         Args:
             root: Parsed XML root element
             activity_info: Activity metadata from manifest
-            
+
         Returns:
             Dictionary with title, node_type=FORUM, and content_html (intro only)
         """
@@ -462,20 +462,18 @@ class MoodleCourseParser:
             "content_html": intro,
         }
 
-    def _parse_quiz(
-        self, root, activity_info, extracted, manifest, assessments, assets
-    ):
+    def _parse_quiz(self, root, activity_info, extracted, manifest, assessments, assets):
         """
         Parse a Moodle 'quiz' activity.
-        
+
         Extracts the quiz title, intro, and the list of question IDs referenced
         in the quiz. Does NOT create stub questions; actual questions are taken
         from the question bank during transformation.
-        
+
         Args:
             root: Parsed XML root element
             activity_info: Activity metadata from manifest
-            
+
         Returns:
             Dictionary with title, node_type=QUIZ, content_html,
             and metadata.question_ids (list of question IDs from question bank)
@@ -485,14 +483,14 @@ class MoodleCourseParser:
             inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
-        
+
         # Collect question IDs from <question_instance> elements
         question_ids = []
         for qi in inner.findall(".//question_instance"):
             qid = qi.findtext("questionid")
             if qid:
                 question_ids.append(qid)
-        
+
         return {
             "title": title,
             "node_type": NodeType.QUIZ.value,
@@ -503,26 +501,24 @@ class MoodleCourseParser:
             },
         }
 
-    def _parse_resource(
-        self, root, activity_info, extracted, manifest, assessments, assets
-    ):
+    def _parse_resource(self, root, activity_info, extracted, manifest, assessments, assets):
         """
         Parse a Moodle 'resource' activity (downloadable file).
-        
+
         Resolution chain:
           1. Read inforef.xml to get file ID(s) for this activity
           2. Look up each ID in manifest.file_records to get contenthash
           3. Create an asset dict for the first valid file found
-        
+
         Only the primary content file is captured. Files with filename '.' are
         directory sentinel entries and are skipped. If the physical file is
         absent from files/ (draft or deleted), the asset still records the
         contenthash - read_file_bytes handles missing bytes gracefully.
-        
+
         Args:
             root: Parsed XML root element
             activity_info: Activity metadata from manifest
-            
+
         Returns:
             Dictionary with title, node_type=ACTIVITY, and metadata.asset_id
         """
@@ -556,14 +552,16 @@ class MoodleCourseParser:
             asset_path = f"files/{contenthash[:2]}/{contenthash}"
             asset_id = self._asset_id(asset_path)
             # Store asset with correct path
-            assets.append({
-                "asset_id": asset_id,
-                "path": f"files/{contenthash[:2]}/{contenthash}",
-                "mime_type": mimetype,
-                "checksum": contenthash,
-                "original_filename": filename,
-                "is_video": is_video,
-            })
+            assets.append(
+                {
+                    "asset_id": asset_id,
+                    "path": f"files/{contenthash[:2]}/{contenthash}",
+                    "mime_type": mimetype,
+                    "checksum": contenthash,
+                    "original_filename": filename,
+                    "is_video": is_video,
+                }
+            )
             # Create download link for non-video resources
             if not is_video:
                 download_link = f'<p><a href="/static/{asset_path}">Download {filename}</a></p>'
@@ -589,20 +587,18 @@ class MoodleCourseParser:
                 "metadata": {"activity_type": "resource", "asset_id": asset_id},
             }
 
-    def _parse_scorm(
-        self, root, activity_info, extracted, manifest, assessments, assets
-    ):
+    def _parse_scorm(self, root, activity_info, extracted, manifest, assessments, assets):
         """
         Parse a Moodle 'SCORM' activity.
-        
+
         SCORM packages contain their own internal manifest and assets. For MVP
         purposes, only the activity name is captured. Full SCORM unpacking is
         slated for Phase 2.
-        
+
         Args:
             root: Parsed XML root element
             activity_info: Activity metadata from manifest
-            
+
         Returns:
             Dictionary with title, node_type=SCORM, and metadata.activity_type
         """
@@ -629,15 +625,17 @@ class MoodleCourseParser:
         if zip_path.is_file():
             relative_zip = zip_path.relative_to(extracted).as_posix()
             asset_id = self._asset_id(relative_zip)
-            assets.append({
-                "asset_id": asset_id,
-                "path": relative_zip,
-                "mime_type": "application/zip",
-                "checksum": "",
-                "original_zip_path": relative_zip,
-                "version": scorm_settings.get("version", ""),
-                "is_scorm": True,
-            })
+            assets.append(
+                {
+                    "asset_id": asset_id,
+                    "path": relative_zip,
+                    "mime_type": "application/zip",
+                    "checksum": "",
+                    "original_zip_path": relative_zip,
+                    "version": scorm_settings.get("version", ""),
+                    "is_scorm": True,
+                }
+            )
 
             return {
                 "title": title,
@@ -752,20 +750,18 @@ class MoodleCourseParser:
             "content_html": f"<h3>Lesson: {title}</h3>{intro}",
         }
 
-    def _parse_video(
-        self, root, activity_info, extracted, manifest, assessments, assets
-    ):
+    def _parse_video(self, root, activity_info, extracted, manifest, assessments, assets):
         """
-        Parse a Moodle 'video' activity (if using mod_videofile plugin) 
+        Parse a Moodle 'video' activity (if using mod_videofile plugin)
         or extract video from resource/url activities.
-        
+
         For video files (.mp4, .webm, .ogg), creates an asset and returns
         metadata with video URL.
-        
+
         Args:
             root: Parsed XML root element
             activity_info: Activity metadata from manifest
-            
+
         Returns:
             Dictionary with title, node_type=VIDEO, and metadata.asset_id
         """
@@ -775,12 +771,12 @@ class MoodleCourseParser:
         if inner is None:
             inner = root
         title = inner.findtext("name", activity_info.get("title", ""))
-        
+
         # Get file IDs from inforef.xml
         file_ids = self.reader.read_inforef(extracted, activity_info["directory"])
         asset_id = None
         video_url = None
-        
+
         for fid in file_ids:
             record = manifest["file_records"].get(fid)
             if not record:
@@ -788,24 +784,26 @@ class MoodleCourseParser:
             contenthash = record.get("contenthash", "")
             filename = record.get("filename", "")
             mimetype = record.get("mimetype", "")
-            
+
             # Check if this is a video file
             if not contenthash or not filename:
                 continue
             if mimetype and "video" in mimetype.lower():
                 asset_path = f"files/{contenthash[:2]}/{contenthash}"
                 asset_id = self._asset_id(asset_path)
-                assets.append({
-                    "asset_id": asset_id,
-                    "path": asset_path,
-                    "mime_type": mimetype,
-                    "checksum": contenthash,
-                    "is_video": True,
-                    "original_filename": filename,
-                })
+                assets.append(
+                    {
+                        "asset_id": asset_id,
+                        "path": asset_path,
+                        "mime_type": mimetype,
+                        "checksum": contenthash,
+                        "is_video": True,
+                        "original_filename": filename,
+                    }
+                )
                 video_url = asset_path
                 break
-        
+
         return {
             "title": title,
             "node_type": NodeType.VIDEO.value,
@@ -818,21 +816,21 @@ class MoodleCourseParser:
 
     # Fragment Helpers
 
-    def _store_fragment(self, extracted: Path, relative_path: str) -> Optional[str]:
+    def _store_fragment(self, extracted: Path, relative_path: str) -> str | None:
         """
         Store a file as a raw XML fragment and return its fragment_id.
-        
+
         Reads the file as raw text (not parsed XML) to preserve the original
         formatting exactly - important for accuracy and debugging. The fragment
         is appended to self.fragments for later inclusion in the course dict.
-        
+
         Returns None if the file does not exist, so callers can treat a missing
         fragment_id as an expected absence rather than an error.
-        
+
         Args:
             extracted: Path to extracted .mbz directory
             relative_path: Path relative to extracted directory (e.g., "course/course.xml")
-            
+
         Returns:
             Fragment ID string, or None if file doesn't exist
         """
@@ -841,17 +839,19 @@ class MoodleCourseParser:
             return None
         fragment_path = resolve_under(extracted, relative_path)
         fragment_id = stable_id("fragment", "moodle", relative_path)
-        self.fragments.append({
-            "fragment_id": fragment_id,
-            "kind": "xml",
-            "source_location": {
-                "source_system": "moodle",
-                "package_path": relative_path,
-                "file_path": str(fragment_path),
-            },
-            "raw_text": raw_text,
-            "checksum": sha256_bytes(raw_text.encode("utf-8")),
-        })
+        self.fragments.append(
+            {
+                "fragment_id": fragment_id,
+                "kind": "xml",
+                "source_location": {
+                    "source_system": "moodle",
+                    "package_path": relative_path,
+                    "file_path": str(fragment_path),
+                },
+                "raw_text": raw_text,
+                "checksum": sha256_bytes(raw_text.encode("utf-8")),
+            }
+        )
         return fragment_id
 
     def _asset_id(self, path: str) -> str:
@@ -860,21 +860,21 @@ class MoodleCourseParser:
 
     # Question Bank Parsing
 
-    def _load_questions(self, extracted: Path) -> List[Dict[str, Any]]:
+    def _load_questions(self, extracted: Path) -> list[dict[str, Any]]:
         """
         Load and parse questions.xml from the Moodle backup.
-        
+
         Moodle stores question bank data in a separate questions.xml file at
         the root of the extracted archive. This method parses that file and
         returns a list of question assessment dicts with full question data
         (prompt text, answer options, etc.).
-        
+
         The returned structure is passed to TransformService._transform_moodle
         where it becomes Question and AnswerOption domain objects.
-        
+
         Args:
             extracted: Path to extracted .mbz directory
-            
+
         Returns:
             List of question assessment dicts with structure:
             [
@@ -895,28 +895,30 @@ class MoodleCourseParser:
                 },
                 ...
             ]
-            
+
             Returns empty list if questions.xml doesn't exist or can't be parsed.
         """
         questions_xml = extracted / "questions.xml"
         if not questions_xml.exists():
             return []
-        
+
         from .question_parser import parse_questions
+
         return parse_questions(str(questions_xml))
 
 
 # Module-Level Helpers
 
+
 def _join_html(*parts: str) -> str:
     """
     Join non-empty HTML strings with a newline separator.
-    
+
     Used by _parse_page and _parse_label to combine intro and content HTML.
-    
+
     Args:
         *parts: HTML strings to join
-        
+
     Returns:
         Joined string with non-empty parts separated by newlines
     """

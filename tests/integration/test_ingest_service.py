@@ -10,9 +10,7 @@ from persistence.repositories import get_job, list_jobs
 
 
 def test_openedx_ingest_persists_course_owner_and_paths(openedx_archive: Path):
-    result = IngestService(owner="alice").inspect(
-        str(openedx_archive), source_type="openedx"
-    )
+    result = IngestService(owner="alice").inspect(str(openedx_archive), source_type="openedx")
 
     job = get_job(result["job_id"], owner="alice")
     assert job is not None
@@ -30,9 +28,7 @@ def test_openedx_ingest_persists_course_owner_and_paths(openedx_archive: Path):
 
 
 def test_moodle_ingest_persists_course_owner_and_paths(moodle_archive: Path):
-    result = IngestService(owner="bob").inspect(
-        str(moodle_archive), source_type="moodle"
-    )
+    result = IngestService(owner="bob").inspect(str(moodle_archive), source_type="moodle")
 
     job = get_job(result["job_id"], owner="bob")
     assert job is not None
@@ -47,9 +43,7 @@ def test_ingest_rejects_unknown_source_type_without_persisting(
     openedx_archive: Path,
 ):
     with pytest.raises(UnsupportedSourceError):
-        IngestService(owner="alice").inspect(
-            str(openedx_archive), source_type="canvas"
-        )
+        IngestService(owner="alice").inspect(str(openedx_archive), source_type="canvas")
 
     assert list_jobs(owner="alice") == []
 
@@ -59,8 +53,6 @@ def test_ingest_rejects_malformed_archive_without_persisting(tmp_path: Path):
     malformed.write_bytes(b"this is not a tar archive")
 
     with pytest.raises(tarfile.TarError):
-        IngestService(owner="alice").inspect(
-            str(malformed), source_type="openedx"
-        )
+        IngestService(owner="alice").inspect(str(malformed), source_type="openedx")
 
     assert list_jobs(owner="alice") == []

@@ -1,4 +1,4 @@
-"""Moodle Target Adapter – Converts a canonical Course to a Moodle .mbz backup."""
+"""Moodle Target Adapter - Converts a canonical Course to a Moodle .mbz backup."""
 
 from __future__ import annotations
 
@@ -6,13 +6,15 @@ import hashlib
 import tarfile
 import time
 import uuid
-import xml.etree.ElementTree as ET
+
+# XML generation and passthrough only; untrusted parsing goes through core.xml_utils.
+import xml.etree.ElementTree as ET  # nosec B405
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from core.archive_utils import resolve_under
 from core.config import get_settings
-from domain.entities import AnswerOption, Asset, ContentNode, Course, Question
+from domain.entities import AnswerOption, ContentNode, Course, Question
 from domain.enums import NodeType
 
 MOODLE_VERSION = "2024100700"
@@ -24,37 +26,49 @@ class MoodleTargetAdapter:
     """Generate a Moodle backup archive from a canonical Course."""
 
     def __init__(self, work_dir: str | Path | None = None):
-        self.work_root = (
-            Path(work_dir) if work_dir is not None else get_settings().work_dir
-        )
-        self.work_dir: Optional[Path] = None
-        self.course: Optional[Course] = None
+        self.work_root = Path(work_dir) if work_dir is not None else get_settings().work_dir
+        self.work_dir: Path | None = None
+        self.course: Course | None = None
         self._next_id = 1
         self.course_id = 1
-        self.section_records: List[Dict[str, Any]] = []
-        self.activity_records: List[Dict[str, Any]] = []
-        self.file_records: List[Dict[str, Any]] = []
-        self.asset_file_ids: Dict[str, int] = {}
-        self.question_ids: Dict[str, int] = {}
-        self.question_categories: Dict[str, int] = {}
-        self.quiz_module_ids: Dict[str, int] = {}
+        self.section_records: list[dict[str, Any]] = []
+        self.activity_records: list[dict[str, Any]] = []
+        self.file_records: list[dict[str, Any]] = []
+        self.asset_file_ids: dict[str, int] = {}
+        self.question_ids: dict[str, int] = {}
+        self.question_categories: dict[str, int] = {}
+        self.quiz_module_ids: dict[str, int] = {}
         self._current_module_id = 0
         self._current_module_name = ""
+
+    @property
+    def _course(self) -> Course:
+        """Narrowed view of the course being exported."""
+        if self.course is None:
+            raise RuntimeError("Course not set: call generate_backup() first")
+        return self.course
+
+    @property
+    def _work_dir(self) -> Path:
+        """Narrowed view of the working directory for this export."""
+        if self.work_dir is None:
+            raise RuntimeError("Working directory not set: call generate_backup() first")
+        return self.work_dir
 
     def generate_backup(
         self,
         course: Course,
         output_path: str,
-        source_extracted_path: Optional[str] = None,
+        source_extracted_path: str | None = None,
     ) -> str:
         """Generate a Moodle .mbz backup from a canonical Course."""
         self._reset_state()
         self.course = course
         self.work_dir = self.work_root / "moodle" / uuid.uuid4().hex
-        self.work_dir.mkdir(parents=True, exist_ok=True)
+        self._work_dir.mkdir(parents=True, exist_ok=True)
 
         for subdir in ("course", "sections", "activities", "files"):
-            (self.work_dir / subdir).mkdir(exist_ok=True)
+            (self._work_dir / subdir).mkdir(exist_ok=True)
 
         self._prepare_file_records(source_extracted_path)
         self._prepare_question_ids()
@@ -66,11 +80,11 @@ class MoodleTargetAdapter:
         self._write_auxiliary_files()
         self._write_archive_index()
 
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(output_path, "w:gz") as tar:
-            tar.add(self.work_dir, arcname=".")
-        return str(output_path)
+        archive_path = Path(output_path)
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(archive_path, "w:gz") as tar:
+            tar.add(self._work_dir, arcname=".")
+        return str(archive_path)
 
     def _reset_state(self) -> None:
         """Clear all per-export state so one adapter instance is reusable."""
@@ -96,10 +110,10 @@ class MoodleTargetAdapter:
     def _write_course_xml(self) -> None:
         self.course_id = self._new_id()
         root = ET.Element("course", id=str(self.course_id))
-        ET.SubElement(root, "shortname").text = self.course.metadata.get(
-            "shortname", self.course.title[:50]
+        ET.SubElement(root, "shortname").text = self._course.metadata.get(
+            "shortname", self._course.title[:50]
         )
-        ET.SubElement(root, "fullname").text = self.course.title
+        ET.SubElement(root, "fullname").text = self._course.title
         ET.SubElement(root, "idnumber").text = ""
         ET.SubElement(root, "summary").text = ""
         ET.SubElement(root, "summaryformat").text = "1"
@@ -116,7 +130,7 @@ class MoodleTargetAdapter:
         ET.SubElement(root, "groupmode").text = "0"
         ET.SubElement(root, "groupmodeforce").text = "0"
         ET.SubElement(root, "defaultgroupingid").text = "0"
-        ET.SubElement(root, "lang").text = self.course.metadata.get("lang") or "en"
+        ET.SubElement(root, "lang").text = self._course.metadata.get("lang") or "en"
         ET.SubElement(root, "theme").text = ""
         ET.SubElement(root, "timecreated").text = str(int(time.time()))
         ET.SubElement(root, "timemodified").text = str(int(time.time()))
@@ -129,16 +143,16 @@ class MoodleTargetAdapter:
         ET.SubElement(category, "name").text = "Default"
         ET.SubElement(category, "description").text = ""
         ET.SubElement(root, "tags")
-        self._write_xml(self.work_dir / "course" / "course.xml", root)
+        self._write_xml(self._work_dir / "course" / "course.xml", root)
 
     def _write_sections_and_activities(self) -> None:
         section_number = 0
-        for chapter in sorted(self.course.content_nodes, key=lambda n: n.position):
+        for chapter in sorted(self._course.content_nodes, key=lambda n: n.position):
             if chapter.node_type != NodeType.CHAPTER:
                 continue
             section_number += 1
             section_id = self._new_id()
-            section_dir = self.work_dir / "sections" / f"section_{section_id}"
+            section_dir = self._work_dir / "sections" / f"section_{section_id}"
             section_dir.mkdir(parents=True, exist_ok=True)
 
             sequence = []
@@ -146,16 +160,20 @@ class MoodleTargetAdapter:
                 module_id = self._write_activity(section_id, section_number, comp)
                 sequence.append(module_id)
 
-            self.section_records.append({
-                "id": section_id,
-                "number": section_number,
-                "title": chapter.title or f"Section {section_number}",
-                "directory": f"sections/section_{section_id}",
-                "sequence": sequence,
-            })
-            self._write_section_xml(section_dir, section_id, section_number, chapter.title, sequence)
+            self.section_records.append(
+                {
+                    "id": section_id,
+                    "number": section_number,
+                    "title": chapter.title or f"Section {section_number}",
+                    "directory": f"sections/section_{section_id}",
+                    "sequence": sequence,
+                }
+            )
+            self._write_section_xml(
+                section_dir, section_id, section_number, chapter.title, sequence
+            )
 
-    def _collect_activities(self, chapter: ContentNode) -> List[ContentNode]:
+    def _collect_activities(self, chapter: ContentNode) -> list[ContentNode]:
         activities = []
         for seq in sorted(chapter.children, key=lambda n: n.position):
             if seq.node_type != NodeType.SEQUENTIAL:
@@ -170,8 +188,8 @@ class MoodleTargetAdapter:
         section_dir: Path,
         section_id: int,
         section_number: int,
-        title: Optional[str],
-        sequence: List[int],
+        title: str | None,
+        sequence: list[int],
     ) -> None:
         root = ET.Element("section", id=str(section_id))
         ET.SubElement(root, "number").text = str(section_number - 1)
@@ -184,19 +202,15 @@ class MoodleTargetAdapter:
         ET.SubElement(root, "timemodified").text = "0"
         self._write_xml(section_dir / "section.xml", root)
 
-    def _write_activity(
-        self, section_id: int, section_number: int, comp: ContentNode
-    ) -> int:
+    def _write_activity(self, section_id: int, section_number: int, comp: ContentNode) -> int:
         module_name = self._map_module_name(comp)
         module_id = self._new_id()
         self._current_module_id = module_id
         self._current_module_name = module_name
-        act_dir = self.work_dir / "activities" / f"{module_name}_{module_id}"
+        act_dir = self._work_dir / "activities" / f"{module_name}_{module_id}"
         act_dir.mkdir(parents=True, exist_ok=True)
 
-        self._write_module_xml(
-            act_dir, module_name, module_id, section_id, section_number
-        )
+        self._write_module_xml(act_dir, module_name, module_id, section_id, section_number)
         if module_name == "page":
             self._write_page_xml(act_dir, comp)
         elif module_name == "label":
@@ -216,13 +230,15 @@ class MoodleTargetAdapter:
         else:
             self._write_label_xml(act_dir, comp, warn=True)
 
-        self.activity_records.append({
-            "module_id": module_id,
-            "section_id": section_id,
-            "module_name": module_name,
-            "title": comp.title or module_name.title(),
-            "directory": f"activities/{module_name}_{module_id}",
-        })
+        self.activity_records.append(
+            {
+                "module_id": module_id,
+                "section_id": section_id,
+                "module_name": module_name,
+                "title": comp.title or module_name.title(),
+                "directory": f"activities/{module_name}_{module_id}",
+            }
+        )
         return module_id
 
     def _map_module_name(self, comp: ContentNode) -> str:
@@ -289,14 +305,12 @@ class MoodleTargetAdapter:
         ET.SubElement(root, "legacyfiles").text = "0"
         ET.SubElement(root, "legacyfileslast").text = "$@NULL@$"
         ET.SubElement(root, "display").text = "0"
-        ET.SubElement(root, "displayoptions").text = "a:1:{s:10:\"printintro\";i:1;}"
+        ET.SubElement(root, "displayoptions").text = 'a:1:{s:10:"printintro";i:1;}'
         ET.SubElement(root, "revision").text = "1"
         ET.SubElement(root, "timemodified").text = str(int(time.time()))
         self._write_activity_xml(act_dir, "page.xml", root)
 
-    def _write_label_xml(
-        self, act_dir: Path, comp: ContentNode, warn: bool = False
-    ) -> None:
+    def _write_label_xml(self, act_dir: Path, comp: ContentNode, warn: bool = False) -> None:
         intro = comp.metadata.get("content_html", "")
         if warn:
             intro = "<p>This component could not be fully converted.</p>" + intro
@@ -310,32 +324,26 @@ class MoodleTargetAdapter:
     def _write_url_xml(self, act_dir: Path, comp: ContentNode) -> None:
         external_url = comp.metadata.get("externalurl", "")
         if not external_url and comp.metadata.get("youtube_id"):
-            external_url = (
-                f"https://www.youtube.com/watch?v={comp.metadata['youtube_id']}"
-            )
+            external_url = f"https://www.youtube.com/watch?v={comp.metadata['youtube_id']}"
         root = ET.Element("url", id=str(self._new_id()))
         ET.SubElement(root, "name").text = comp.title or "Link"
         ET.SubElement(root, "externalurl").text = external_url
         ET.SubElement(root, "intro").text = comp.metadata.get("content_html", "")
         ET.SubElement(root, "introformat").text = "1"
         ET.SubElement(root, "display").text = "0"
-        ET.SubElement(root, "displayoptions").text = "a:2:{s:10:\"printintro\";i:1;s:17:\"printintrofield\";i:1;}"
+        ET.SubElement(
+            root, "displayoptions"
+        ).text = 'a:2:{s:10:"printintro";i:1;s:17:"printintrofield";i:1;}'
         ET.SubElement(root, "timemodified").text = str(int(time.time()))
         self._write_activity_xml(act_dir, "url.xml", root)
 
-    def _write_quiz_xml(
-        self, act_dir: Path, comp: ContentNode, module_id: int
-    ) -> None:
+    def _write_quiz_xml(self, act_dir: Path, comp: ContentNode, module_id: int) -> None:
         assessment = next(
-            (
-                a
-                for a in self.course.assessments
-                if a.assessment_id == comp.assessment_id
-            ),
+            (a for a in self._course.assessments if a.assessment_id == comp.assessment_id),
             None,
         )
         questions = (
-            [q for q in self.course.questions if q.assessment_id == assessment.assessment_id]
+            [q for q in self._course.questions if q.assessment_id == assessment.assessment_id]
             if assessment
             else []
         )
@@ -356,9 +364,7 @@ class MoodleTargetAdapter:
         ET.SubElement(root, "questionsperpage").text = "0"
         ET.SubElement(root, "navmethod").text = "free"
         ET.SubElement(root, "shuffleanswers").text = "1"
-        ET.SubElement(root, "sumgrades").text = str(
-            sum(q.points for q in questions)
-        )
+        ET.SubElement(root, "sumgrades").text = str(sum(q.points for q in questions))
         ET.SubElement(root, "grade").text = "10.00000"
         ET.SubElement(root, "timemodified").text = str(int(time.time()))
 
@@ -391,7 +397,7 @@ class MoodleTargetAdapter:
         ET.SubElement(root, "legacyfiles").text = "0"
         ET.SubElement(root, "legacyfileslast").text = "$@NULL@$"
         ET.SubElement(root, "display").text = "0"
-        ET.SubElement(root, "displayoptions").text = "a:1:{s:10:\"printintro\";i:1;}"
+        ET.SubElement(root, "displayoptions").text = 'a:1:{s:10:"printintro";i:1;}'
         ET.SubElement(root, "filterfiles").text = "0"
         ET.SubElement(root, "revision").text = "1"
         ET.SubElement(root, "timemodified").text = str(int(time.time()))
@@ -410,9 +416,7 @@ class MoodleTargetAdapter:
         ET.SubElement(root, "scormtype").text = "local"
         ET.SubElement(root, "reference").text = ""
         version = settings.get("version", "")
-        ET.SubElement(root, "version").text = (
-            "SCORM_2004" if "2004" in version else "SCORM_1.2"
-        )
+        ET.SubElement(root, "version").text = "SCORM_2004" if "2004" in version else "SCORM_1.2"
         ET.SubElement(root, "launch").text = settings.get("launch", "")
         ET.SubElement(root, "skipview").text = settings.get("skipview", "0")
         ET.SubElement(root, "auto").text = settings.get("auto", "0")
@@ -441,7 +445,7 @@ class MoodleTargetAdapter:
         ET.SubElement(root, "timemodified").text = str(int(time.time()))
         self._write_activity_xml(act_dir, "workshop.xml", root)
 
-    def _write_inforef(self, act_dir: Path, asset_id: Optional[str]) -> None:
+    def _write_inforef(self, act_dir: Path, asset_id: str | None) -> None:
         if not asset_id:
             return
         file_id = self.asset_file_ids.get(asset_id)
@@ -454,7 +458,7 @@ class MoodleTargetAdapter:
         self._write_xml(act_dir / "inforef.xml", root)
 
     def _assign_asset_file(
-        self, asset_id: Optional[str], component: str, filearea: str, itemid: int
+        self, asset_id: str | None, component: str, filearea: str, itemid: int
     ) -> None:
         """Attach an asset's file record to the module that uses it."""
         if not asset_id:
@@ -467,9 +471,9 @@ class MoodleTargetAdapter:
                 return
 
     def _prepare_question_ids(self) -> None:
-        for assessment in self.course.assessments:
+        for assessment in self._course.assessments:
             questions = [
-                q for q in self.course.questions if q.assessment_id == assessment.assessment_id
+                q for q in self._course.questions if q.assessment_id == assessment.assessment_id
             ]
             if not questions:
                 continue
@@ -481,23 +485,21 @@ class MoodleTargetAdapter:
     def _write_questions_xml(self) -> None:
         root = ET.Element("question_categories")
         written_question_ids: set[str] = set()
-        for assessment in self.course.assessments:
+        for assessment in self._course.assessments:
             category_id = self.question_categories.get(assessment.assessment_id)
             if category_id is None:
                 continue
             questions = [
-                q for q in self.course.questions if q.assessment_id == assessment.assessment_id
+                q for q in self._course.questions if q.assessment_id == assessment.assessment_id
             ]
             category = ET.SubElement(root, "question_category", id=str(category_id))
             ET.SubElement(category, "name").text = assessment.title or "Default"
             ET.SubElement(category, "contextid").text = str(category_id)
             ET.SubElement(category, "contextlevel").text = "50"
-            ET.SubElement(category, "contextinstanceid").text = str(
-                self._course_id()
-            )
-            ET.SubElement(category, "info").text = (
-                f"Questions for {assessment.title or 'assessment'}"
-            )
+            ET.SubElement(category, "contextinstanceid").text = str(self._course_id())
+            ET.SubElement(
+                category, "info"
+            ).text = f"Questions for {assessment.title or 'assessment'}"
             ET.SubElement(category, "infoformat").text = "0"
             ET.SubElement(category, "stamp").text = f"lms-converter+{uuid.uuid4().hex}"
             ET.SubElement(category, "parent").text = "0"
@@ -511,7 +513,7 @@ class MoodleTargetAdapter:
                 written_question_ids.add(question.question_id)
                 self._write_single_question(questions_elem, question, numeric_id)
 
-        self._write_xml(self.work_dir / "questions.xml", root)
+        self._write_xml(self._work_dir / "questions.xml", root)
 
     def _course_id(self) -> int:
         return self.course_id
@@ -552,7 +554,7 @@ class MoodleTargetAdapter:
         ET.SubElement(q_elem, "idnumber").text = "$@NULL@$"
 
         options = [
-            opt for opt in self.course.answer_options if opt.question_id == question.question_id
+            opt for opt in self._course.answer_options if opt.question_id == question.question_id
         ]
 
         if moodle_type == "multichoice":
@@ -562,9 +564,7 @@ class MoodleTargetAdapter:
             for option in options:
                 answer_id = self._new_id()
                 answer_ids.append((answer_id, option))
-                self._write_moodle_answer(
-                    answers_elem, answer_id, option.text, option.is_correct
-                )
+                self._write_moodle_answer(answers_elem, answer_id, option.text, option.is_correct)
             multi = ET.SubElement(plugin, "multichoice", id=str(self._new_id()))
             ET.SubElement(multi, "layout").text = "0"
             ET.SubElement(multi, "single").text = "0" if qtype == "multiselect" else "1"
@@ -596,12 +596,8 @@ class MoodleTargetAdapter:
                         is_correct=False,
                     ),
                 ]
-            true_option = next(
-                (o for o in options if o.text.strip().lower() == "true"), None
-            )
-            false_option = next(
-                (o for o in options if o.text.strip().lower() == "false"), None
-            )
+            true_option = next((o for o in options if o.text.strip().lower() == "true"), None)
+            false_option = next((o for o in options if o.text.strip().lower() == "false"), None)
             if true_option is None:
                 true_option = AnswerOption(
                     option_id=f"{question.question_id}-true",
@@ -633,9 +629,7 @@ class MoodleTargetAdapter:
             answers_elem = ET.SubElement(plugin, "answers")
             correct_answers = question.metadata.get("correct_answers", [])
             for text in correct_answers:
-                self._write_moodle_answer(
-                    answers_elem, self._new_id(), str(text), True
-                )
+                self._write_moodle_answer(answers_elem, self._new_id(), str(text), True)
             shortanswer = ET.SubElement(plugin, "shortanswer", id=str(self._new_id()))
             ET.SubElement(shortanswer, "usecase").text = "0"
 
@@ -647,13 +641,11 @@ class MoodleTargetAdapter:
                 correct = question.metadata["correct_answers"][0]
             if correct is not None:
                 answer_id = self._new_id()
-                self._write_moodle_answer(
-                    answers_elem, answer_id, str(correct), True
-                )
-                tolerance = ET.SubElement(
-                    answers_elem.find("answer"), "tolerance"
-                )
-                tolerance.text = str(question.metadata.get("tolerance", "0"))
+                self._write_moodle_answer(answers_elem, answer_id, str(correct), True)
+                first_answer = answers_elem.find("answer")
+                if first_answer is not None:
+                    tolerance = ET.SubElement(first_answer, "tolerance")
+                    tolerance.text = str(question.metadata.get("tolerance", "0"))
             numerical = ET.SubElement(plugin, "numerical", id=str(self._new_id()))
             ET.SubElement(numerical, "tolerance").text = str(
                 question.metadata.get("tolerance", "0")
@@ -685,9 +677,9 @@ class MoodleTargetAdapter:
         ET.SubElement(answer, "feedback").text = ""
         ET.SubElement(answer, "feedbackformat").text = "1"
 
-    def _prepare_file_records(self, source_extracted_path: Optional[str]) -> None:
+    def _prepare_file_records(self, source_extracted_path: str | None) -> None:
         source_root = Path(source_extracted_path) if source_extracted_path else None
-        for asset in self.course.assets:
+        for asset in self._course.assets:
             content = b""
             source = None
             if source_root is not None:
@@ -697,11 +689,12 @@ class MoodleTargetAdapter:
                     source = None
             if source is not None and source.is_file():
                 content = source.read_bytes()
-                contenthash = hashlib.sha1(content).hexdigest()
+                contenthash = hashlib.sha1(content, usedforsecurity=False).hexdigest()
             else:
-                contenthash = asset.checksum or hashlib.sha1(
-                    asset.path.encode("utf-8")
-                ).hexdigest()
+                contenthash = (
+                    asset.checksum
+                    or hashlib.sha1(asset.path.encode("utf-8"), usedforsecurity=False).hexdigest()
+                )
 
             file_id = self._new_id()
             self.asset_file_ids[asset.asset_id] = file_id
@@ -722,7 +715,7 @@ class MoodleTargetAdapter:
             self.file_records.append(record)
 
             if content:
-                dest_dir = self.work_dir / "files" / contenthash[:2]
+                dest_dir = self._work_dir / "files" / contenthash[:2]
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 (dest_dir / contenthash).write_bytes(content)
 
@@ -737,7 +730,7 @@ class MoodleTargetAdapter:
             directory_keys.add(key)
             directory_record = {
                 "id": self._new_id(),
-                "contenthash": hashlib.sha1(b"").hexdigest(),
+                "contenthash": hashlib.sha1(b"", usedforsecurity=False).hexdigest(),
                 "filepath": record["filepath"],
                 "filename": ".",
                 "filesize": 0,
@@ -748,13 +741,13 @@ class MoodleTargetAdapter:
             }
             self._write_file_record(root, directory_record)
         if directory_keys:
-            empty_hash = hashlib.sha1(b"").hexdigest()
-            empty_dir = self.work_dir / "files" / empty_hash[:2]
+            empty_hash = hashlib.sha1(b"", usedforsecurity=False).hexdigest()
+            empty_dir = self._work_dir / "files" / empty_hash[:2]
             empty_dir.mkdir(parents=True, exist_ok=True)
             (empty_dir / empty_hash).write_bytes(b"")
-        self._write_xml(self.work_dir / "files.xml", root)
+        self._write_xml(self._work_dir / "files.xml", root)
 
-    def _write_file_record(self, root: ET.Element, record: Dict[str, Any]) -> None:
+    def _write_file_record(self, root: ET.Element, record: dict[str, Any]) -> None:
         file_elem = ET.SubElement(root, "file", id=str(record["id"]))
         ET.SubElement(file_elem, "contenthash").text = record["contenthash"]
         ET.SubElement(file_elem, "contextid").text = str(self._course_id())
@@ -780,7 +773,9 @@ class MoodleTargetAdapter:
     def _write_moodle_backup_xml(self) -> None:
         root = ET.Element("moodle_backup")
         info = ET.SubElement(root, "information")
-        ET.SubElement(info, "name").text = f"backup-moodle2-course-{self._course_id()}-{uuid.uuid4().hex[:8]}.mbz"
+        ET.SubElement(
+            info, "name"
+        ).text = f"backup-moodle2-course-{self._course_id()}-{uuid.uuid4().hex[:8]}.mbz"
         ET.SubElement(info, "moodle_version").text = MOODLE_VERSION
         ET.SubElement(info, "moodle_release").text = BACKUP_RELEASE
         ET.SubElement(info, "backup_version").text = BACKUP_VERSION
@@ -793,9 +788,9 @@ class MoodleTargetAdapter:
         ET.SubElement(info, "original_site_identifier_hash").text = ""
         ET.SubElement(info, "original_course_id").text = str(self._course_id())
         ET.SubElement(info, "original_course_format").text = "topics"
-        ET.SubElement(info, "original_course_fullname").text = self.course.title
-        ET.SubElement(info, "original_course_shortname").text = self.course.metadata.get(
-            "shortname", self.course.title[:50]
+        ET.SubElement(info, "original_course_fullname").text = self._course.title
+        ET.SubElement(info, "original_course_shortname").text = self._course.metadata.get(
+            "shortname", self._course.title[:50]
         )
         ET.SubElement(info, "original_course_startdate").text = str(int(time.time()))
         ET.SubElement(info, "original_course_enddate").text = "0"
@@ -830,7 +825,7 @@ class MoodleTargetAdapter:
 
         course_elem = ET.SubElement(contents, "course")
         ET.SubElement(course_elem, "courseid").text = str(self._course_id())
-        ET.SubElement(course_elem, "title").text = self.course.title
+        ET.SubElement(course_elem, "title").text = self._course.title
         ET.SubElement(course_elem, "directory").text = "course"
 
         settings = ET.SubElement(info, "settings")
@@ -847,33 +842,33 @@ class MoodleTargetAdapter:
             ET.SubElement(setting, "name").text = name
             ET.SubElement(setting, "value").text = value
 
-        self._write_xml(self.work_dir / "moodle_backup.xml", root)
+        self._write_xml(self._work_dir / "moodle_backup.xml", root)
 
     def _write_archive_index(self) -> None:
-        entries: List[str] = []
-        for path in sorted(self.work_dir.rglob("*")):
-            relative = path.relative_to(self.work_dir).as_posix()
+        entries: list[str] = []
+        for path in sorted(self._work_dir.rglob("*")):
+            relative = path.relative_to(self._work_dir).as_posix()
             if relative == ".ARCHIVE_INDEX":
                 continue
             if path.is_dir():
                 entries.append(f"{relative}/\td\t0\t?")
             else:
-                entries.append(
-                    f"{relative}\tf\t{path.stat().st_size}\t{int(path.stat().st_mtime)}"
-                )
-        content = (
-            f"Moodle archive file index. Count: {len(entries)}\n"
-            + "\n".join(entries)
-            + "\n"
-        )
-        (self.work_dir / ".ARCHIVE_INDEX").write_text(content, encoding="utf-8")
+                entries.append(f"{relative}\tf\t{path.stat().st_size}\t{int(path.stat().st_mtime)}")
+        content = f"Moodle archive file index. Count: {len(entries)}\n" + "\n".join(entries) + "\n"
+        (self._work_dir / ".ARCHIVE_INDEX").write_text(content, encoding="utf-8")
 
     def _write_auxiliary_files(self) -> None:
         """Write the empty root-level XML files a Moodle backup normally contains."""
         auxiliary = {
             "gradebook.xml": (
                 "gradebook",
-                ["attributes", "grade_categories", "grade_items", "grade_letters", "grade_settings"],
+                [
+                    "attributes",
+                    "grade_categories",
+                    "grade_items",
+                    "grade_letters",
+                    "grade_settings",
+                ],
             ),
             "roles.xml": ("roles_definition", []),
             "groups.xml": ("groups", ["groupings"]),
@@ -887,12 +882,10 @@ class MoodleTargetAdapter:
             root = ET.Element(root_name)
             for child_name in children:
                 ET.SubElement(root, child_name)
-            self._write_xml(self.work_dir / filename, root)
-        (self.work_dir / "moodle_backup.log").write_text("", encoding="utf-8")
+            self._write_xml(self._work_dir / filename, root)
+        (self._work_dir / "moodle_backup.log").write_text("", encoding="utf-8")
 
-    def _write_activity_xml(
-        self, act_dir: Path, filename: str, inner: ET.Element
-    ) -> None:
+    def _write_activity_xml(self, act_dir: Path, filename: str, inner: ET.Element) -> None:
         activity_id = inner.get("id") or str(self._new_id())
         activity = ET.Element(
             "activity",

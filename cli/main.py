@@ -1,5 +1,5 @@
 """
-LMS Converter CLI – Migrate courses between Open edX and Moodle.
+LMS Converter CLI - Migrate courses between Open edX and Moodle.
 
 Commands:
 - inspect: Inspect a course and show structure, warnings, and migration readiness
@@ -10,16 +10,15 @@ Usage:
     lms-converter migrate path/to/course.mbz --target openedx --output export.tar.gz
 """
 
-from importlib.metadata import PackageNotFoundError, version as package_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 
 import typer
 
 from cli.commands import inspect_command, migrate_command, report_command
 
 # Create Typer application with help text
-app = typer.Typer(
-    help="LMS Converter - Migrate courses between Open edX and Moodle"
-)
+app = typer.Typer(help="LMS Converter - Migrate courses between Open edX and Moodle")
 
 
 def _version_callback(value: bool) -> None:
@@ -50,6 +49,7 @@ def main(
     Use 'migrate' to convert a course from one LMS to another.
     """
     pass
+
 
 # Register commands
 app.command("inspect")(inspect_command)

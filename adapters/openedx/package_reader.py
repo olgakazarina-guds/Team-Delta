@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-from typing import Optional
 
 from core.archive_utils import safe_extract_tar
 
@@ -48,12 +47,12 @@ class OpenEdxPackageReader:
 
         raise FileNotFoundError("No course.xml found in extracted directory")
 
-    def get_chapter_xml_path(self, extracted_dir: Path, chapter_url_name: str) -> Optional[Path]:
+    def get_chapter_xml_path(self, extracted_dir: Path, chapter_url_name: str) -> Path | None:
         """Resolve a chapter url_name to its XML file path."""
         return extracted_dir / "chapter" / f"{chapter_url_name}.xml"
 
-    def get_sequential_xml_path(self, extracted_dir: Path, sequential_url_name: str) -> Optional[Path]:
+    def get_sequential_xml_path(self, extracted_dir: Path, sequential_url_name: str) -> Path | None:
         return extracted_dir / "sequential" / f"{sequential_url_name}.xml"
 
-    def get_vertical_xml_path(self, extracted_dir: Path, vertical_url_name: str) -> Optional[Path]:
+    def get_vertical_xml_path(self, extracted_dir: Path, vertical_url_name: str) -> Path | None:
         return extracted_dir / "vertical" / f"{vertical_url_name}.xml"

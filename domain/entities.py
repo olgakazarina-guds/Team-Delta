@@ -1,5 +1,5 @@
 """
-Domain Entities – Canonical data model for course migration.
+Domain Entities - Canonical data model for course migration.
 
 Core entities:
 - Course: Root entity containing all course data
@@ -13,8 +13,9 @@ Core entities:
 - LtiToolLink: External tool integrations (LTI)
 """
 
+from typing import Any
+
 from pydantic import BaseModel, Field
-from typing import Any, Dict, List, Optional
 
 from .enums import AssessmentType, NodeType, Severity, SourceSystem
 from .raw_fragment import RawFragment
@@ -30,13 +31,13 @@ class ContentNode(BaseModel):
 
     node_id: str
     node_type: NodeType
-    title: Optional[str] = None
-    parent_id: Optional[str] = None
+    title: str | None = None
+    parent_id: str | None = None
     position: int = 0
-    children: List["ContentNode"] = Field(default_factory=list)
-    assessment_id: Optional[str] = None  # Link to Assessment (if node contains quiz/problem)
-    raw_fragment_ids: List[str] = Field(default_factory=list)  # References to RawFragment entities
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    children: list["ContentNode"] = Field(default_factory=list)
+    assessment_id: str | None = None  # Link to Assessment (if node contains quiz/problem)
+    raw_fragment_ids: list[str] = Field(default_factory=list)  # References to RawFragment entities
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Assessment(BaseModel):
@@ -50,9 +51,9 @@ class Assessment(BaseModel):
     course_id: str
     title: str
     assessment_type: AssessmentType  # e.g., "quiz", "openassessment", "assignment"
-    max_score: Optional[float] = None
-    raw_fragment_ids: List[str] = Field(default_factory=list)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    max_score: float | None = None
+    raw_fragment_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Question(BaseModel):
@@ -65,10 +66,10 @@ class Question(BaseModel):
     question_id: str
     assessment_id: str
     question_type: str  # "multichoice", "text_input", "numerical", "code", etc.
-    prompt_text: Optional[str] = None
+    prompt_text: str | None = None
     points: float = 0.0
-    raw_fragment_ids: List[str] = Field(default_factory=list)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    raw_fragment_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerOption(BaseModel):
@@ -94,10 +95,10 @@ class Asset(BaseModel):
     asset_id: str
     course_id: str
     path: str
-    mime_type: Optional[str] = None
-    checksum: Optional[str] = None
-    raw_fragment_id: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    mime_type: str | None = None
+    checksum: str | None = None
+    raw_fragment_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class MappingNote(BaseModel):
@@ -111,8 +112,8 @@ class MappingNote(BaseModel):
     severity: Severity
     code: str
     message: str
-    source_fragment_id: Optional[str] = None
-    target_ref: Optional[str] = None
+    source_fragment_id: str | None = None
+    target_ref: str | None = None
     fallback_used: bool = False
 
 
@@ -128,10 +129,9 @@ class LtiToolLink(BaseModel):
     content_node_id: str  # ContentNode this link is associated with
     tool_name: str
     launch_url: str
-    custom_params: Dict[str, str] = Field(default_factory=dict)
+    custom_params: dict[str, str] = Field(default_factory=dict)
     is_graded: bool = False
-    raw_fragment_id: Optional[str] = None
-
+    raw_fragment_id: str | None = None
 
 
 class Course(BaseModel):
@@ -145,24 +145,24 @@ class Course(BaseModel):
     course_id: str
     title: str
     source_system: SourceSystem
-    content_nodes: List[ContentNode] = Field(default_factory=list)
-    assessments: List[Assessment] = Field(default_factory=list)
-    questions: List[Question] = Field(default_factory=list)
-    answer_options: List[AnswerOption] = Field(default_factory=list)
-    lti_links: List[LtiToolLink] = Field(default_factory=list)
-    assets: List[Asset] = Field(default_factory=list)
-    raw_fragments: List[RawFragment] = Field(default_factory=list)
-    mapping_notes: List[MappingNote] = Field(default_factory=list)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    content_nodes: list[ContentNode] = Field(default_factory=list)
+    assessments: list[Assessment] = Field(default_factory=list)
+    questions: list[Question] = Field(default_factory=list)
+    answer_options: list[AnswerOption] = Field(default_factory=list)
+    lti_links: list[LtiToolLink] = Field(default_factory=list)
+    assets: list[Asset] = Field(default_factory=list)
+    raw_fragments: list[RawFragment] = Field(default_factory=list)
+    mapping_notes: list[MappingNote] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     schema_version: int = 2
 
-    def integrity_errors(self) -> List[str]:
+    def integrity_errors(self) -> list[str]:
         """Return canonical graph integrity violations without raising.
 
         Validation reports these as errors; target adapters can also use the
         method as a final guard before generating an import archive.
         """
-        errors: List[str] = []
+        errors: list[str] = []
         node_ids: set[str] = set()
         assessment_ids = {a.assessment_id for a in self.assessments}
         question_ids = {q.question_id for q in self.questions}
@@ -230,10 +230,11 @@ class Course(BaseModel):
 
 class ScormAsset(Asset):
     """SCORM package asset (extends Asset with SCORM-specific fields)."""
+
     original_zip_path: str
     version: str = ""
-    launch: Optional[str] = None
-    skipview: Optional[str] = None
-    auto: Optional[str] = None
-    grademethod: Optional[str] = None
-    maxgrade: Optional[str] = None
+    launch: str | None = None
+    skipview: str | None = None
+    auto: str | None = None
+    grademethod: str | None = None
+    maxgrade: str | None = None

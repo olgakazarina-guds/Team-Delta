@@ -50,8 +50,12 @@ lms-converter = "cli.main:app"
 
 [dependency-groups]
 dev = [
+    "bandit[toml]>=1.9.4",
+    "mypy>=2.4.1",
+    "pip-audit>=2.10.1",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
+    "ruff>=0.17.4",
 ]
 
 [tool.setuptools.packages.find]
@@ -62,3 +66,45 @@ exclude = ["data*", "docs*", "tests*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["data", "dist", "docs"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/conftest.py" = ["E501"] # Fixture XML data lines
+"tests/*" = ["RUF012"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["adapters", "cli", "core", "domain", "persistence"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+no_implicit_reexport = true
+
+[tool.coverage.run]
+source = ["adapters", "cli", "core", "domain", "persistence"]
+
+[tool.coverage.report]
+show_missing = true
+precision = 1
+fail_under = 80
+
+[tool.bandit]
+targets = ["adapters", "cli", "core", "domain", "persistence"]
+exclude_dirs = ["tests", "data", "dist", "docs", ".venv"]

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import html
 import json
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from domain.entities import ContentNode, Course
 
@@ -24,8 +25,8 @@ def count_node_type(nodes: Iterable[ContentNode], target_type: str) -> int:
     return count
 
 
-def _report_items(report_items: Iterable[Any]) -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
+def _report_items(report_items: Iterable[Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
     for item in report_items:
         if hasattr(item, "model_dump"):
             items.append(item.model_dump(mode="json"))
@@ -36,7 +37,7 @@ def _report_items(report_items: Iterable[Any]) -> List[Dict[str, Any]]:
     return items
 
 
-def _unsupported_features(report_items: List[Dict[str, Any]]) -> List[str]:
+def _unsupported_features(report_items: list[dict[str, Any]]) -> list[str]:
     unsupported: set[str] = set()
     for note in report_items:
         code = note.get("code")
@@ -51,10 +52,10 @@ def _unsupported_features(report_items: List[Dict[str, Any]]) -> List[str]:
 
 def build_report_data(
     job_id: str,
-    job: Dict[str, Any],
+    job: dict[str, Any],
     course: Course,
     report_items: Iterable[Any],
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return a stable, JSON-serializable report document."""
     items = _report_items(report_items)
     return {
@@ -74,8 +75,9 @@ def build_report_data(
         "assessments": len(course.assessments),
         "questions": len(course.questions),
         "answer_options": len(course.answer_options),
-        "assets": [{"id": a.asset_id, "path": a.path, "checksum": a.checksum}
-                   for a in course.assets],
+        "assets": [
+            {"id": a.asset_id, "path": a.path, "checksum": a.checksum} for a in course.assets
+        ],
         "components": {
             "chapters": count_node_type(course.content_nodes, "chapter"),
             "sequentials": count_node_type(course.content_nodes, "sequential"),
@@ -92,7 +94,7 @@ def build_report_data(
 
 def render_json_report(
     job_id: str,
-    job: Dict[str, Any],
+    job: dict[str, Any],
     course: Course,
     report_items: Iterable[Any],
 ) -> str:
@@ -107,13 +109,16 @@ def render_json_report(
 
 def render_html_report(
     job_id: str,
-    job: Dict[str, Any],
+    job: dict[str, Any],
     course: Course,
     report_items: Iterable[Any],
 ) -> str:
     """Render a self-contained HTML report with all untrusted text escaped."""
     data = build_report_data(job_id, job, course, report_items)
-    e = lambda value: html.escape(str(value if value is not None else ""), quote=True)
+
+    def e(value: Any) -> str:
+        return html.escape(str(value if value is not None else ""), quote=True)
+
     components = data["components"]
 
     rows = [
@@ -149,31 +154,29 @@ def render_html_report(
         for asset in data["assets"][:200]
     )
     if len(data["assets"]) > 200:
-        asset_rows += (
-            f"<tr><td colspan=\"3\">... and {len(data['assets']) - 200} more</td></tr>"
-        )
+        asset_rows += f'<tr><td colspan="3">... and {len(data["assets"]) - 200} more</td></tr>'
 
-    unsupported_rows = "\n".join(
-        f"<li>{e(item)}</li>" for item in data["unsupported_features"]
-    ) or "<li>None detected</li>"
+    unsupported_rows = (
+        "\n".join(f"<li>{e(item)}</li>" for item in data["unsupported_features"])
+        or "<li>None detected</li>"
+    )
 
     note_rows = []
     for note in data["validation"]:
         severity = str(note.get("severity", "info")).lower()
-        css_class = {"warning": "warning", "error": "error", "info": "info"}.get(
-            severity, ""
-        )
+        css_class = {"warning": "warning", "error": "error", "info": "info"}.get(severity, "")
         note_rows.append(
-            f"<tr class=\"{css_class}\"><td>{e(severity)}</td>"
+            f'<tr class="{css_class}"><td>{e(severity)}</td>'
             f"<td>{e(note.get('code', ''))}</td>"
             f"<td>{e(note.get('message', ''))}</td></tr>"
         )
     if not note_rows:
         note_rows.append('<tr><td colspan="3">No validation notes.</td></tr>')
 
-    integrity_rows = "\n".join(
-        f"<li>{e(message)}</li>" for message in data["integrity_errors"]
-    ) or "<li>No integrity errors.</li>"
+    integrity_rows = (
+        "\n".join(f"<li>{e(message)}</li>" for message in data["integrity_errors"])
+        or "<li>No integrity errors.</li>"
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -182,7 +185,8 @@ def render_html_report(
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>LMS Converter Report - {e(job_id)}</title>
     <style>
-        body {{ font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 2rem; color: #1f2937; }}
+        body {{ font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+            margin: 2rem; color: #1f2937; }}
         h1, h2 {{ color: #111827; }}
         table {{ border-collapse: collapse; width: 100%; margin: 1rem 0; }}
         th, td {{ border: 1px solid #d1d5db; padding: 8px; text-align: left; vertical-align: top; }}

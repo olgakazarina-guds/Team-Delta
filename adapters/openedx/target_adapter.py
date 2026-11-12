@@ -1,5 +1,5 @@
 """
-Open edX Target Adapter, Converts canonical Course domain objects into 
+Open edX Target Adapter, Converts canonical Course domain objects into
 Open edX export format (.tar.gz).
 
 This adapter handles:
@@ -10,25 +10,36 @@ XML generation for all Open edX components (html, problem, video, etc.)
 """
 
 import json
-import os
 import tarfile
 import uuid
-import xml.etree.ElementTree as ET
+
+# XML generation and passthrough only; untrusted parsing goes through core.xml_utils.
+import xml.etree.ElementTree as ET  # nosec B405
 from pathlib import Path, PurePosixPath
-from typing import Dict, Any, List, Optional
+from typing import Any
 
 from core.archive_utils import resolve_under
 from core.config import get_settings
-from domain.entities import Course, ContentNode, Assessment, Question, AnswerOption, Asset, RawFragment, MappingNote
-from domain.enums import SourceSystem, NodeType, AssessmentType, Severity
+from domain.entities import (
+    AnswerOption,
+    Assessment,
+    Asset,
+    ContentNode,
+    Course,
+    Question,
+)
+from domain.enums import NodeType
+
+# Open edX grading policy defaults.
+DEFAULT_GRADE_CUTOFF = 0.5
 
 
 class OpenEdxTargetAdapter:
     """
     Adapter for exporting canonical Course objects to Open edX format.
 
-    This class transforms domain entities into Open edX's XML-based course 
-    structure and packages them into a tar.gz archive suitable for import 
+    This class transforms domain entities into Open edX's XML-based course
+    structure and packages them into a tar.gz archive suitable for import
     into Open edX instances.
 
     Attributes:
@@ -39,32 +50,41 @@ class OpenEdxTargetAdapter:
 
     def __init__(self, work_dir: str | Path | None = None):
         """Initialize the adapter with empty state."""
-        self.work_root = (
-            Path(work_dir) if work_dir is not None else get_settings().work_dir
-        )
-        self.work_dir: Optional[Path] = None
-        self.course: Optional[Course] = None
-        self.node_id_map: Dict[str, str] = {}
-        self.asset_paths: Dict[str, str] = {}
+        self.work_root = Path(work_dir) if work_dir is not None else get_settings().work_dir
+        self.work_dir: Path | None = None
+        self.course: Course | None = None
+        self.node_id_map: dict[str, str] = {}
+        self.asset_paths: dict[str, str] = {}
+
+    @property
+    def _course(self) -> Course:
+        """Narrowed view of the course being exported."""
+        if self.course is None:
+            raise RuntimeError("Course not set: call generate_export() first")
+        return self.course
+
+    @property
+    def _work_dir(self) -> Path:
+        """Narrowed view of the working directory for this export."""
+        if self.work_dir is None:
+            raise RuntimeError("Working directory not set: call generate_export() first")
+        return self.work_dir
 
     def generate_export(
-        self, 
-        course: Course, 
-        output_path: str, 
-        source_extracted_path: Optional[str] = None
+        self, course: Course, output_path: str, source_extracted_path: str | None = None
     ) -> str:
         """
         Generate an Open edX course export tarball from a canonical Course.
-    
-        Creates the full directory structure, generates all XML files for 
-        course hierarchy and components, copies assets if available, and 
+
+        Creates the full directory structure, generates all XML files for
+        course hierarchy and components, copies assets if available, and
         packages everything into a .tar.gz archive.
-    
+
         Args:
             course: The canonical Course domain object to export
             output_path: Destination path for the .tar.gz file
             source_extracted_path: Optional path to source extraction for copying assets
-            
+
         Returns:
             Absolute path to the generated .tar.gz export file
 
@@ -77,11 +97,24 @@ class OpenEdxTargetAdapter:
         self.node_id_map = {}
         self.asset_paths = self._build_asset_paths()
         self.work_dir = self.work_root / "openedx" / uuid.uuid4().hex
-        self.work_dir.mkdir(parents=True, exist_ok=True)
+        self._work_dir.mkdir(parents=True, exist_ok=True)
 
         # Step 2: Create Open edX directory structure
-        for subdir in ["chapter", "sequential", "vertical", "html", "problem", "video", "openassessment", "discussion", "scormxblock", "course", "static", "policies"]:
-            (self.work_dir / subdir).mkdir(parents=True, exist_ok=True)
+        for subdir in [
+            "chapter",
+            "sequential",
+            "vertical",
+            "html",
+            "problem",
+            "video",
+            "openassessment",
+            "discussion",
+            "scormxblock",
+            "course",
+            "static",
+            "policies",
+        ]:
+            (self._work_dir / subdir).mkdir(parents=True, exist_ok=True)
 
         # Step 3: Generate root course.xml (course settings)
         self._write_root_course_xml()
@@ -100,25 +133,25 @@ class OpenEdxTargetAdapter:
             self._copy_assets(Path(source_extracted_path))
 
         # Step 7: Package everything into a tar.gz archive
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(output_path, "w:gz") as tar:
+        archive_path = Path(output_path)
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(archive_path, "w:gz") as tar:
             # Open edX expects course.xml at the archive root, not under an
             # extra wrapper directory.
-            tar.add(self.work_dir, arcname=".")
-        return str(output_path)
+            tar.add(self._work_dir, arcname=".")
+        return str(archive_path)
 
     def _safe_name(self, name: str, max_len: int = 32) -> str:
         """
         Convert a name to a safe url_name for Open edX.
-        
-        Removes special characters and truncates to max length. Open edX 
+
+        Removes special characters and truncates to max length. Open edX
         requires url_names to be alphanumeric with only ., _, - allowed.
-        
+
         Args:
             name: Original name (e.g., course title, chapter title)
             max_len: Maximum length for the safe name
-            
+
         Returns:
             Safe url_name string (e.g., "Introduction_to_Course" or "item")
         """
@@ -127,11 +160,7 @@ class OpenEdxTargetAdapter:
 
     def _safe_asset_filename(self, asset: Asset) -> str:
         """Return a flat, safe static filename that keeps the file extension."""
-        raw = (
-            asset.metadata.get("original_filename")
-            or Path(asset.path).name
-            or asset.asset_id
-        )
+        raw = asset.metadata.get("original_filename") or Path(asset.path).name or asset.asset_id
         safe = "".join(c for c in raw if c.isalnum() or c in "._-")
         if not safe:
             safe = asset.asset_id
@@ -151,7 +180,7 @@ class OpenEdxTargetAdapter:
         """
         raw_path = asset.path.replace("\\", "/")
         if raw_path.startswith("static/"):
-            relative = raw_path[len("static/"):]
+            relative = raw_path[len("static/") :]
             parts = []
             for part in PurePosixPath(relative).parts:
                 if part in ("", "."):
@@ -164,11 +193,11 @@ class OpenEdxTargetAdapter:
                 return "/".join(parts)
         return self._safe_asset_filename(asset)
 
-    def _build_asset_paths(self) -> Dict[str, str]:
+    def _build_asset_paths(self) -> dict[str, str]:
         """Map asset IDs to unique relative paths under the export's static folder."""
-        paths: Dict[str, str] = {}
+        paths: dict[str, str] = {}
         used: set[str] = set()
-        for asset in self.course.assets:
+        for asset in self._course.assets:
             name = self._safe_asset_relative_path(asset)
             if name in used:
                 parent, _, filename = name.rpartition("/")
@@ -180,20 +209,18 @@ class OpenEdxTargetAdapter:
 
     def _asset_static_path(self, asset: Asset) -> str:
         """Return the static URL path for an asset."""
-        return self.asset_paths.get(
-            asset.asset_id, self._safe_asset_relative_path(asset)
-        )
+        return self.asset_paths.get(asset.asset_id, self._safe_asset_relative_path(asset))
 
     def _get_url_name(self, node_id: str) -> str:
         """
         Get or generate a url_name for a given node_id.
-        
+
         Maintains a mapping to ensure consistent url_names across the export.
         Generates a new safe name if this node_id hasn't been seen before.
-        
+
         Args:
             node_id: Unique identifier for the content node
-            
+
         Returns:
             url_name string for use in Open edX XML files
         """
@@ -204,50 +231,50 @@ class OpenEdxTargetAdapter:
     def _write_root_course_xml(self):
         """
         Write the root course.xml file (course settings).
-        
+
         This file defines org, course code, and url_name at the root level.
         Located at: work_dir/course.xml
         """
         root = ET.Element("course")
-        root.set("url_name", self._safe_name(self.course.title, 32))
-        root.set("org", self.course.metadata.get("org", "Org"))
-        root.set("course", self.course.metadata.get("course_code", "Course"))
-        self._write_xml(self.work_dir / "course.xml", root)
+        root.set("url_name", self._safe_name(self._course.title, 32))
+        root.set("org", self._course.metadata.get("org", "Org"))
+        root.set("course", self._course.metadata.get("course_code", "Course"))
+        self._write_xml(self._work_dir / "course.xml", root)
 
     def _write_actual_course_xml(self):
         """
         Write the actual course definition file (course/{url_name}.xml).
-        
+
         This file contains the top-level chapter references for the course.
         Open edX uses this to discover all chapters in the course.
         Located at: work_dir/course/{url_name}.xml
         """
-        url_name = self._safe_name(self.course.title, 32)
-        course_dir = self.work_dir / "course"
+        url_name = self._safe_name(self._course.title, 32)
+        course_dir = self._work_dir / "course"
         root = ET.Element("course")
-        root.set("display_name", self.course.title)
-        
-        for node in self.course.content_nodes:
+        root.set("display_name", self._course.title)
+
+        for node in self._course.content_nodes:
             if node.node_type == NodeType.CHAPTER:
                 ch = ET.SubElement(root, "chapter")
                 ch.set("url_name", self._get_url_name(node.node_id))
-        
+
         self._write_xml(course_dir / f"{url_name}.xml", root)
 
     def _write_policies(self) -> None:
         """Write the minimal policy files expected in an OLX export."""
-        url_name = self._safe_name(self.course.title, 32)
+        url_name = self._safe_name(self._course.title, 32)
         policy = {
             f"course/{url_name}": {
-                "display_name": self.course.title,
+                "display_name": self._course.title,
                 "start": "1970-01-01T00:00:00Z",
             }
         }
         grading_policy = {
             "GRADER": [],
-            "GRADE_CUTOFFS": {"Pass": 0.5},
+            "GRADE_CUTOFFS": {"Pass": DEFAULT_GRADE_CUTOFF},
         }
-        policy_dir = self.work_dir / "policies"
+        policy_dir = self._work_dir / "policies"
         course_policy_dir = policy_dir / url_name
         course_policy_dir.mkdir(parents=True, exist_ok=True)
         (course_policy_dir / "policy.json").write_text(
@@ -256,10 +283,10 @@ class OpenEdxTargetAdapter:
         (course_policy_dir / "grading_policy.json").write_text(
             json.dumps(grading_policy, indent=2), encoding="utf-8"
         )
-        org = self.course.metadata.get("org", "Org")
-        course_code = self.course.metadata.get("course_code", "Course")
+        org = self._course.metadata.get("org", "Org")
+        course_code = self._course.metadata.get("course_code", "Course")
         assets_policy = {}
-        for asset in self.course.assets:
+        for asset in self._course.assets:
             name = self._asset_static_path(asset)
             assets_policy[name] = {
                 "contentType": asset.mime_type or "application/octet-stream",
@@ -273,10 +300,7 @@ class OpenEdxTargetAdapter:
                     "tag": "c4x",
                 },
                 "displayname": name,
-                "filename": (
-                    f"asset-v1:{org}+{course_code}+{url_name}"
-                    f"+type@asset+block@{name}"
-                ),
+                "filename": (f"asset-v1:{org}+{course_code}+{url_name}+type@asset+block@{name}"),
                 "import_path": None,
                 "locked": False,
                 "thumbnail_location": None,
@@ -288,25 +312,25 @@ class OpenEdxTargetAdapter:
     def _write_chapter(self, node: ContentNode):
         """
         Write XML for a chapter (Chapter -> Sequential hierarchy).
-        
-        Creates chapter.xml with sequential references and recursively 
+
+        Creates chapter.xml with sequential references and recursively
         processes all sequential children.
         Located at: work_dir/chapter/{url_name}.xml
-        
+
         Args:
             node: ContentNode with node_type=CHAPTER
         """
         url_name = self._get_url_name(node.node_id)
         root = ET.Element("chapter")
         root.set("display_name", node.title or "Chapter")
-        
+
         for child in sorted(node.children, key=lambda n: n.position):
             if child.node_type == NodeType.SEQUENTIAL:
                 seq = ET.SubElement(root, "sequential")
                 seq.set("url_name", self._get_url_name(child.node_id))
-        
-        self._write_xml(self.work_dir / "chapter" / f"{url_name}.xml", root)
-        
+
+        self._write_xml(self._work_dir / "chapter" / f"{url_name}.xml", root)
+
         # Recursively process sequential children
         for child in sorted(node.children, key=lambda n: n.position):
             if child.node_type == NodeType.SEQUENTIAL:
@@ -315,25 +339,25 @@ class OpenEdxTargetAdapter:
     def _write_sequential(self, node: ContentNode):
         """
         Write XML for a sequential (Sequential -> Vertical hierarchy).
-        
-        Creates sequential.xml with vertical references and recursively 
+
+        Creates sequential.xml with vertical references and recursively
         processes all vertical children.
         Located at: work_dir/sequential/{url_name}.xml
-        
+
         Args:
             node: ContentNode with node_type=SEQUENTIAL
         """
         url_name = self._get_url_name(node.node_id)
         root = ET.Element("sequential")
         root.set("display_name", node.title or "Sequential")
-        
+
         for child in sorted(node.children, key=lambda n: n.position):
             if child.node_type == NodeType.VERTICAL:
                 vert = ET.SubElement(root, "vertical")
                 vert.set("url_name", self._get_url_name(child.node_id))
-        
-        self._write_xml(self.work_dir / "sequential" / f"{url_name}.xml", root)
-        
+
+        self._write_xml(self._work_dir / "sequential" / f"{url_name}.xml", root)
+
         # Recursively process vertical children
         for child in sorted(node.children, key=lambda n: n.position):
             if child.node_type == NodeType.VERTICAL:
@@ -342,18 +366,18 @@ class OpenEdxTargetAdapter:
     def _write_vertical(self, node: ContentNode):
         """
         Write XML for a vertical containing components (HTML, Problem, Video).
-        
-        Creates vertical.xml with component references and generates the 
+
+        Creates vertical.xml with component references and generates the
         component-specific XML files (html.xml, problem.xml, video.xml).
         Located at: work_dir/vertical/{url_name}.xml
-        
+
         Args:
             node: ContentNode with node_type=VERTICAL
         """
         url_name = self._get_url_name(node.node_id)
         root = ET.Element("vertical")
         root.set("display_name", node.title or "Vertical")
-        
+
         for comp in sorted(node.children, key=lambda n: n.position):
             if comp.node_type in (NodeType.HTML, NodeType.PAGE):
                 # HTML component
@@ -371,28 +395,34 @@ class OpenEdxTargetAdapter:
                 elem = ET.SubElement(root, "html")
                 elem.set("url_name", self._get_url_name(comp.node_id))
                 self._write_html(comp)
-                
+
             elif comp.node_type == NodeType.PROBLEM:
                 # Problem component with assessment link
                 elem = ET.SubElement(root, "problem")
                 elem.set("url_name", self._get_url_name(comp.node_id))
-                
+
                 # Try to find the assessment linked to this component
                 assessment = None
                 if comp.assessment_id:
                     assessment = next(
-                        (a for a in self.course.assessments if a.assessment_id == comp.assessment_id), 
-                        None
+                        (
+                            a
+                            for a in self._course.assessments
+                            if a.assessment_id == comp.assessment_id
+                        ),
+                        None,
                     )
-                
+
                 if assessment:
                     # Get questions and answer options for this assessment
                     questions = [
-                        q for q in self.course.questions 
+                        q
+                        for q in self._course.questions
                         if q.assessment_id == assessment.assessment_id
                     ]
                     answer_options = [
-                        opt for opt in self.course.answer_options 
+                        opt
+                        for opt in self._course.answer_options
                         if opt.question_id in [q.question_id for q in questions]
                     ]
                     self._write_problem(comp, assessment, questions, answer_options)
@@ -402,7 +432,7 @@ class OpenEdxTargetAdapter:
                 else:
                     # Fallback: write a placeholder problem
                     self._write_placeholder_problem(comp)
-                    
+
             elif comp.node_type == NodeType.VIDEO:
                 # Video component
                 elem = ET.SubElement(root, "video")
@@ -413,7 +443,7 @@ class OpenEdxTargetAdapter:
                 elem = ET.SubElement(root, "scormxblock")
                 elem.set("url_name", self._get_url_name(comp.node_id))
                 self._write_scorm(comp)
-            
+
             elif comp.node_type == NodeType.OPENASSESSMENT:
                 # First, add an HTML component to display the prompt text
                 if comp.metadata.get("content_html"):
@@ -429,7 +459,7 @@ class OpenEdxTargetAdapter:
                     # Add the html reference in the vertical
                     html_elem = ET.SubElement(root, "html")
                     html_elem.set("url_name", self._get_url_name(html_prompt.node_id))
-                
+
                 # Then add the openassessment component
                 elem = ET.SubElement(root, "openassessment")
                 elem.set("url_name", self._get_url_name(comp.node_id))
@@ -440,51 +470,51 @@ class OpenEdxTargetAdapter:
                 elem.set("url_name", self._get_url_name(comp.node_id))
                 self._write_discussion(comp)
 
-        self._write_xml(self.work_dir / "vertical" / f"{url_name}.xml", root)
+        self._write_xml(self._work_dir / "vertical" / f"{url_name}.xml", root)
 
     def _write_html(self, comp: ContentNode):
         """
         Write HTML component files (.html content + .xml wrapper).
-        
-        Creates both the HTML content file and the XML wrapper that 
+
+        Creates both the HTML content file and the XML wrapper that
         references it.
         Files: work_dir/html/{url_name}.html + work_dir/html/{url_name}.xml
-        
+
         Args:
             comp: ContentNode with node_type=HTML and content_html metadata
         """
         url_name = self._get_url_name(comp.node_id)
         content = comp.metadata.get("content_html", comp.title or "")
-        
+
         # Write .html file (actual content)
-        html_path = self.work_dir / "html" / f"{url_name}.html"
+        html_path = self._work_dir / "html" / f"{url_name}.html"
         html_path.write_text(content, encoding="utf-8")
-        
+
         # Write .xml wrapper
         root = ET.Element("html")
         root.set("display_name", comp.title or "HTML")
         root.set("filename", f"{url_name}.html")
-        self._write_xml(self.work_dir / "html" / f"{url_name}.xml", root)
+        self._write_xml(self._work_dir / "html" / f"{url_name}.xml", root)
 
     def _write_problem(
-        self, 
-        comp: ContentNode, 
-        assessment: Assessment, 
-        questions: List[Question], 
-        answer_options: List[AnswerOption]
+        self,
+        comp: ContentNode,
+        assessment: Assessment,
+        questions: list[Question],
+        answer_options: list[AnswerOption],
     ):
         """
         Write problem XML with questions and answer options.
-        
+
         Supports:
         multichoice: single-select (multiplechoiceresponse)
         truefalse: true/false (multiplechoiceresponse)
         shortanswer: text input (stringresponse)
         numerical: numerical input (numericalresponse)
         essay: open response (openassessment - not implemented, placeholder)
-        
+
         Located at: work_dir/problem/{url_name}.xml
-        
+
         Args:
             comp: ContentNode with node_type=PROBLEM
             assessment: Assessment entity linked to this problem
@@ -500,13 +530,9 @@ class OpenEdxTargetAdapter:
             qtype = q.question_type
 
             if qtype in ("multichoice", "single-select"):
-                self._write_multiple_choice(
-                    root, q, q_options, multi_select=False
-                )
+                self._write_multiple_choice(root, q, q_options, multi_select=False)
             elif qtype in ("multiselect", "multi-select"):
-                self._write_multiple_choice(
-                    root, q, q_options, multi_select=True
-                )
+                self._write_multiple_choice(root, q, q_options, multi_select=True)
             elif qtype == "truefalse":
                 if not q_options:
                     q_options = [
@@ -523,14 +549,10 @@ class OpenEdxTargetAdapter:
                             is_correct=False,
                         ),
                     ]
-                self._write_multiple_choice(
-                    root, q, q_options, multi_select=False
-                )
+                self._write_multiple_choice(root, q, q_options, multi_select=False)
             elif qtype in ("shortanswer", "text_input"):
                 correct_answers = q.metadata.get("correct_answers", [])
-                self._write_string_response(
-                    root, q.prompt_text or "Question", correct_answers
-                )
+                self._write_string_response(root, q.prompt_text or "Question", correct_answers)
             elif qtype == "numerical":
                 correct_answer = q.metadata.get("correct_answer")
                 self._write_numerical_response(
@@ -542,7 +564,9 @@ class OpenEdxTargetAdapter:
                 # Unsupported type (essay, description, etc.) - create placeholder
                 multiplechoiceresponse = ET.SubElement(root, "multiplechoiceresponse")
                 label = ET.SubElement(multiplechoiceresponse, "label")
-                label.text = f"{q.question_type}: {q.prompt_text or 'Question'} (not fully converted)"
+                label.text = (
+                    f"{q.question_type}: {q.prompt_text or 'Question'} (not fully converted)"
+                )
                 choicegroup = ET.SubElement(
                     multiplechoiceresponse,
                     "choicegroup",
@@ -553,13 +577,13 @@ class OpenEdxTargetAdapter:
                 choice.set("correct", "false")
                 choice.set("name", "a")
 
-        self._write_xml(self.work_dir / "problem" / f"{url_name}.xml", root)
+        self._write_xml(self._work_dir / "problem" / f"{url_name}.xml", root)
 
     def _write_multiple_choice(
         self,
         root: ET.Element,
         question: Question,
-        options: List[AnswerOption],
+        options: list[AnswerOption],
         multi_select: bool,
     ) -> None:
         """Write either a single-select or multi-select choice response."""
@@ -570,9 +594,7 @@ class OpenEdxTargetAdapter:
         else:
             response = ET.SubElement(root, "multiplechoiceresponse")
             ET.SubElement(response, "label").text = question.prompt_text or "Question"
-            group = ET.SubElement(
-                response, "choicegroup", type="MultipleChoice"
-            )
+            group = ET.SubElement(response, "choicegroup", type="MultipleChoice")
 
         for idx, opt in enumerate(options):
             choice = ET.SubElement(group, "choice")
@@ -581,7 +603,7 @@ class OpenEdxTargetAdapter:
             choice.set("name", chr(97 + idx))
 
     def _write_string_response(
-        self, root: ET.Element, prompt: str, correct_answers: List[str]
+        self, root: ET.Element, prompt: str, correct_answers: list[str]
     ) -> None:
         """Write a standard OLX text input response."""
         response = ET.SubElement(root, "stringresponse")
@@ -592,9 +614,7 @@ class OpenEdxTargetAdapter:
             ET.SubElement(response, "additional_answer").set("answer", answer)
         ET.SubElement(response, "textline", size="20")
 
-    def _write_numerical_response(
-        self, root: ET.Element, prompt: str, correct_answer: str
-    ) -> None:
+    def _write_numerical_response(self, root: ET.Element, prompt: str, correct_answer: str) -> None:
         """Write a standard OLX numerical input response."""
         response = ET.SubElement(root, "numericalresponse")
         response.set("answer", correct_answer)
@@ -604,11 +624,11 @@ class OpenEdxTargetAdapter:
     def _write_problem_from_data(self, comp: ContentNode, problem_data: dict):
         """
         Write problem XML directly from stored problem_data dict (fallback).
-        
-        This method is used when the assessment lookup fails (e.g., during 
+
+        This method is used when the assessment lookup fails (e.g., during
         round-trip migration where assessments are not yet linked). It writes
         the problem XML using the data originally parsed from the source.
-        
+
         Args:
             comp: ContentNode with node_type=PROBLEM
             problem_data: Dictionary containing parsed problem data with keys:
@@ -650,10 +670,10 @@ class OpenEdxTargetAdapter:
                 choice.text = "Review required"
                 choice.set("correct", "false")
 
-        self._write_xml(self.work_dir / "problem" / f"{url_name}.xml", root)
+        self._write_xml(self._work_dir / "problem" / f"{url_name}.xml", root)
 
     def _write_multiple_choice_data(
-        self, root: ET.Element, question: Dict[str, Any], multi_select: bool
+        self, root: ET.Element, question: dict[str, Any], multi_select: bool
     ) -> None:
         """Write a choice response directly from a parsed problem-data dict."""
         options = question.get("answer_options", [])
@@ -670,9 +690,7 @@ class OpenEdxTargetAdapter:
         else:
             response = ET.SubElement(root, "multiplechoiceresponse")
             ET.SubElement(response, "label").text = question.get("prompt", "")
-            group = ET.SubElement(
-                response, "choicegroup", type="MultipleChoice"
-            )
+            group = ET.SubElement(response, "choicegroup", type="MultipleChoice")
 
         for idx, opt in enumerate(options):
             choice = ET.SubElement(group, "choice")
@@ -683,49 +701,49 @@ class OpenEdxTargetAdapter:
     def _write_placeholder_problem(self, comp: ContentNode):
         """
         Write a placeholder problem when assessment data is missing.
-        
+
         Creates a problem.xml with a warning message for manual review.
         Located at: work_dir/problem/{url_name}.xml
-        
+
         Args:
             comp: ContentNode with node_type=PROBLEM (no assessment linked)
         """
         url_name = self._get_url_name(comp.node_id)
         root = ET.Element("problem")
         root.set("display_name", comp.title or "Problem")
-        
+
         multiplechoiceresponse = ET.SubElement(root, "multiplechoiceresponse")
         label = ET.SubElement(multiplechoiceresponse, "label")
         label.text = "This problem could not be converted automatically. Please review."
-        
+
         choicegroup = ET.SubElement(multiplechoiceresponse, "choicegroup", type="MultipleChoice")
         choice = ET.SubElement(choicegroup, "choice")
         choice.text = "Review required"
         choice.set("correct", "false")
-        
-        self._write_xml(self.work_dir / "problem" / f"{url_name}.xml", root)
+
+        self._write_xml(self._work_dir / "problem" / f"{url_name}.xml", root)
 
     def _write_video(self, comp: ContentNode):
         """
         Write video component xml.
-        
+
         Handles three cases:
         1. YouTube videos (uses youtube_id attribute)
         2. Self-hosted video files (uses asset reference)
         3. Placeholder for unknown video types
-        
+
         Args:
             comp: ContentNode with node_type=VIDEO and metadata
         """
         url_name = self._get_url_name(comp.node_id)
         metadata = comp.metadata
-        root = ET.Element("video")                  
-        
+        root = ET.Element("video")
+
         root.set("display_name", comp.title or "video")
         root.set("url_name", url_name)
-        
+
         activity_type = metadata.get("activity_type", "")
-        
+
         if activity_type == "youtube":
             youtube_id = metadata.get("youtube_id", "")
             if youtube_id:
@@ -734,16 +752,13 @@ class OpenEdxTargetAdapter:
             else:
                 root.set("youtube_id_1_0", "00000000000")
                 root.set("youtube", "1.00:00000000000")
-                
+
         elif activity_type == "video" or activity_type == "":
             asset_id = metadata.get("asset_id")
-            asset_obj = None                        
-            if self.course.assets:
-                asset_obj = next(
-                    (a for a in self.course.assets if a.asset_id == asset_id),
-                    None                            
-                )
-            
+            asset_obj = None
+            if self._course.assets:
+                asset_obj = next((a for a in self._course.assets if a.asset_id == asset_id), None)
+
             if asset_obj:
                 source = ET.SubElement(root, "source")
                 source.set("src", f"/static/{self._asset_static_path(asset_obj)}")
@@ -751,12 +766,12 @@ class OpenEdxTargetAdapter:
             else:
                 source = ET.SubElement(root, "source")
                 source.set("src", metadata.get("video_url", ""))
-        
+
         else:
-            source = ET.SubElement(root, "source")    
+            source = ET.SubElement(root, "source")
             source.set("src", "")
-        
-        self._write_xml(self.work_dir / "video" / f"{url_name}.xml", root)
+
+        self._write_xml(self._work_dir / "video" / f"{url_name}.xml", root)
 
     def _write_scorm(self, comp: ContentNode):
         url_name = self._get_url_name(comp.node_id)
@@ -764,16 +779,13 @@ class OpenEdxTargetAdapter:
         scorm_settings = metadata.get("scorm_settings", {})
         asset_id = metadata.get("asset_id")
 
-        scorm_asset = next((a for a in self.course.assets if a.asset_id == asset_id), None)
+        scorm_asset = next((a for a in self._course.assets if a.asset_id == asset_id), None)
         if not scorm_asset:
             self._write_placeholder_scorm(comp)
             return
 
         version = scorm_settings.get("version", "")
-        if "2004" in version:
-            version = "SCORM_2004"
-        else:
-            version = "SCORM_12"
+        version = "SCORM_2004" if "2004" in version else "SCORM_12"
 
         # Create the SCORM XBlock XML structure
         root = ET.Element("scormxblock")
@@ -783,7 +795,7 @@ class OpenEdxTargetAdapter:
         root.set("has_score", "true")  # Assuming it's graded
         root.set("weight", scorm_settings.get("maxgrade") or "1")
 
-        self._write_xml(self.work_dir / "scormxblock" / f"{url_name}.xml", root)
+        self._write_xml(self._work_dir / "scormxblock" / f"{url_name}.xml", root)
 
     def _write_placeholder_scorm(self, comp: ContentNode):
         # Fallback for when the asset is missing
@@ -791,27 +803,25 @@ class OpenEdxTargetAdapter:
         root = ET.Element("scormxblock")
         root.set("display_name", comp.title or "Missing SCORM Package")
         root.set("scorm_file", "")
-        self._write_xml(self.work_dir / "scormxblock" / f"{url_name}.xml", root)
+        self._write_xml(self._work_dir / "scormxblock" / f"{url_name}.xml", root)
 
     def _copy_assets(self, source_extracted: Path):
         """
         Copy asset files from source extraction to Open edX static/ folder.
-        
-        Copies files referenced in course.assets from the source extraction 
-        directory to the Open edX export's static folder for inclusion 
+
+        Copies files referenced in course.assets from the source extraction
+        directory to the Open edX export's static folder for inclusion
         in the final tarball.
-        
+
         Args:
             source_extracted: Path to extracted source directory (e.g., Moodle backup)
         """
-        asset_dir = self.work_dir / "static"
+        asset_dir = self._work_dir / "static"
 
-        for asset in self.course.assets:
+        for asset in self._course.assets:
             try:
                 source = resolve_under(source_extracted, asset.path)
-                dest = resolve_under(
-                    asset_dir, self._asset_static_path(asset)
-                )
+                dest = resolve_under(asset_dir, self._asset_static_path(asset))
             except ValueError:
                 continue
             if not source.is_file():
@@ -822,9 +832,9 @@ class OpenEdxTargetAdapter:
     def _write_xml(self, path: Path, root: ET.Element):
         """
         Write an XML element tree to a file with UTF-8 encoding.
-        
+
         Helper method for consistent XML writing across all component types.
-        
+
         Args:
             path: Destination file path
             root: Root XML element to write
@@ -863,7 +873,7 @@ class OpenEdxTargetAdapter:
         prompt_rubric = ET.SubElement(criterion, "prompt")
         prompt_rubric.text = "Evaluate the response based on clarity, evidence, and reasoning."
 
-        self._write_xml(self.work_dir / "openassessment" / f"{url_name}.xml", root)
+        self._write_xml(self._work_dir / "openassessment" / f"{url_name}.xml", root)
 
     def _write_discussion(self, comp: ContentNode):
         """Write an Open edX discussion component (forum)."""
@@ -876,4 +886,4 @@ class OpenEdxTargetAdapter:
         if comp.metadata.get("content_html"):
             desc = ET.SubElement(root, "description")
             desc.text = comp.metadata.get("content_html")
-        self._write_xml(self.work_dir / "discussion" / f"{url_name}.xml", root)
+        self._write_xml(self._work_dir / "discussion" / f"{url_name}.xml", root)

@@ -6,9 +6,10 @@ import hashlib
 import shutil
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Iterable
+from typing import BinaryIO
 
 from core.config import Settings, get_settings
 from core.errors import UploadSecurityError
@@ -76,9 +77,7 @@ def save_upload(
                     break
                 total += len(chunk)
                 if total > cfg.max_upload_bytes:
-                    raise UploadSecurityError(
-                        f"Upload exceeds {cfg.max_upload_bytes} bytes"
-                    )
+                    raise UploadSecurityError(f"Upload exceeds {cfg.max_upload_bytes} bytes")
                 digest.update(chunk)
                 target.write(chunk)
         if total == 0:

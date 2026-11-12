@@ -79,7 +79,7 @@ class Settings:
     log_level: str = "INFO"
 
     @classmethod
-    def from_env(cls, data_dir: str | Path | None = None) -> "Settings":
+    def from_env(cls, data_dir: str | Path | None = None) -> Settings:
         root = (
             Path(data_dir).expanduser()
             if data_dir is not None
@@ -92,28 +92,16 @@ class Settings:
             work_dir=_env_path("LMS_CONVERTER_WORK_DIR", root / "work"),
             upload_dir=_env_path("LMS_CONVERTER_UPLOAD_DIR", root / "uploads"),
             report_dir=_env_path("LMS_CONVERTER_REPORT_DIR", root / "reports"),
-            max_upload_bytes=_env_int(
-                "LMS_CONVERTER_MAX_UPLOAD_BYTES", 512 * 1024 * 1024
-            ),
-            max_extract_bytes=_env_int(
-                "LMS_CONVERTER_MAX_EXTRACT_BYTES", 2 * 1024 * 1024 * 1024
-            ),
+            max_upload_bytes=_env_int("LMS_CONVERTER_MAX_UPLOAD_BYTES", 512 * 1024 * 1024),
+            max_extract_bytes=_env_int("LMS_CONVERTER_MAX_EXTRACT_BYTES", 2 * 1024 * 1024 * 1024),
             max_extract_member_bytes=_env_int(
                 "LMS_CONVERTER_MAX_EXTRACT_MEMBER_BYTES", 512 * 1024 * 1024
             ),
-            max_extract_members=_env_int(
-                "LMS_CONVERTER_MAX_EXTRACT_MEMBERS", 50_000
-            ),
-            max_compression_ratio=_env_float(
-                "LMS_CONVERTER_MAX_COMPRESSION_RATIO", 250.0
-            ),
-            max_xml_bytes=_env_int(
-                "LMS_CONVERTER_MAX_XML_BYTES", 64 * 1024 * 1024
-            ),
+            max_extract_members=_env_int("LMS_CONVERTER_MAX_EXTRACT_MEMBERS", 50_000),
+            max_compression_ratio=_env_float("LMS_CONVERTER_MAX_COMPRESSION_RATIO", 250.0),
+            max_xml_bytes=_env_int("LMS_CONVERTER_MAX_XML_BYTES", 64 * 1024 * 1024),
             max_xml_depth=_env_int("LMS_CONVERTER_MAX_XML_DEPTH", 256),
-            upload_ttl_seconds=_env_int(
-                "LMS_CONVERTER_UPLOAD_TTL_SECONDS", 24 * 60 * 60
-            ),
+            upload_ttl_seconds=_env_int("LMS_CONVERTER_UPLOAD_TTL_SECONDS", 24 * 60 * 60),
             environment=os.environ.get("LMS_CONVERTER_ENV", "development").lower(),
             auth_mode=os.environ.get("LMS_CONVERTER_AUTH_MODE", "none").lower(),
             trusted_user_header=os.environ.get(

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from core.config import get_settings
 from core.errors import UnsafePathError
@@ -35,8 +35,7 @@ def resolve_output_path(
         suffixes = tuple(allowed_suffixes)
         if suffixes and not filename.lower().endswith(suffixes):
             raise UnsafePathError(
-                f"Unsupported output type: {filename!r}. "
-                f"Allowed: {', '.join(suffixes)}"
+                f"Unsupported output type: {filename!r}. Allowed: {', '.join(suffixes)}"
             )
 
     base = Path(root) if root is not None else get_settings().output_dir
@@ -46,7 +45,5 @@ def resolve_output_path(
     try:
         candidate.relative_to(base_resolved)
     except ValueError as exc:
-        raise UnsafePathError(
-            f"Output path escapes the output root: {filename!r}"
-        ) from exc
+        raise UnsafePathError(f"Output path escapes the output root: {filename!r}") from exc
     return candidate

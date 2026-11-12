@@ -1,5 +1,5 @@
 """
-Transform Service – Converts parsed LMS data into normalized domain entities.
+Transform Service - Converts parsed LMS data into normalized domain entities.
 
 Transforms parsed Open edX or Moodle data into canonical domain entities:
 - Course
@@ -12,9 +12,10 @@ Transforms parsed Open edX or Moodle data into canonical domain entities:
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 from adapters.openedx.problem_parser import parse_problem
+from core.identity import stable_id
 from domain.entities import (
     AnswerOption,
     Assessment,
@@ -22,11 +23,10 @@ from domain.entities import (
     ContentNode,
     Course,
     Question,
-    RawFragment,
     ScormAsset,
 )
 from domain.enums import AssessmentType, NodeType, SourceSystem
-from core.identity import stable_id
+from domain.raw_fragment import RawFragment
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 class TransformService:
     """Transform parsed LMS data into canonical domain entities."""
 
-    def transform(self, parsed: Dict[str, Any], source_type: str, job_id: str) -> Course:
+    def transform(self, parsed: dict[str, Any], source_type: str, job_id: str) -> Course:
         """Route parsed data to the appropriate source-specific transformer."""
         logger.info("Transforming %s parse output to canonical IR (job %s)", source_type, job_id)
         if source_type == "openedx":
@@ -53,7 +53,7 @@ class TransformService:
         )
         return course
 
-    def _build_raw_fragments(self, parsed: Dict[str, Any]) -> List[RawFragment]:
+    def _build_raw_fragments(self, parsed: dict[str, Any]) -> list[RawFragment]:
         """Build RawFragment entities from parsed data."""
         raw_fragments = []
         for frag in parsed.get("raw_fragments", []):
@@ -79,13 +79,12 @@ class TransformService:
         )
         course_id = stable_id("course", "openedx", source_key)
         raw_fragments = self._build_raw_fragments(parsed)
-        assessments: List[Assessment] = []
-        questions: List[Question] = []
-        answer_options: List[AnswerOption] = []
-        content_nodes: List[ContentNode] = []
+        assessments: list[Assessment] = []
+        questions: list[Question] = []
+        answer_options: list[AnswerOption] = []
+        content_nodes: list[ContentNode] = []
         assets = [
-            self._asset_from_dict(asset_data, course_id)
-            for asset_data in parsed.get("assets", [])
+            self._asset_from_dict(asset_data, course_id) for asset_data in parsed.get("assets", [])
         ]
         assets_by_path = {asset.path: asset for asset in assets}
 
@@ -122,9 +121,7 @@ class TransformService:
                     title=seq.get("title"),
                     parent_id=chapter_node.node_id,
                     position=seq_idx,
-                    raw_fragment_ids=[seq["raw_fragment_id"]]
-                    if seq.get("raw_fragment_id")
-                    else [],
+                    raw_fragment_ids=[seq["raw_fragment_id"]] if seq.get("raw_fragment_id") else [],
                     metadata={"source_url_name": seq.get("url_name")},
                 )
                 chapter_node.children.append(seq_node)
@@ -212,12 +209,12 @@ class TransformService:
     def _add_openedx_problem(
         self,
         raw_problem_xml: str,
-        comp: Dict[str, Any],
+        comp: dict[str, Any],
         comp_node: ContentNode,
         course_id: str,
-        assessments: List[Assessment],
-        questions: List[Question],
-        answer_options: List[AnswerOption],
+        assessments: list[Assessment],
+        questions: list[Question],
+        answer_options: list[AnswerOption],
     ) -> None:
         problem_data = parse_problem(raw_problem_xml, comp.get("url_name", ""))
         problem_ref = comp.get("url_name") or comp_node.node_id
@@ -228,9 +225,7 @@ class TransformService:
             title=problem_data["assessment_title"],
             assessment_type=AssessmentType.QUIZ,
             max_score=sum(q.get("points", 0) for q in problem_data["questions"]),
-            raw_fragment_ids=[comp["raw_fragment_id"]]
-            if comp.get("raw_fragment_id")
-            else [],
+            raw_fragment_ids=[comp["raw_fragment_id"]] if comp.get("raw_fragment_id") else [],
             metadata={
                 "problem_url_name": comp.get("url_name"),
                 "original_type": "problem",
@@ -241,10 +236,8 @@ class TransformService:
 
         for q_index, q_data in enumerate(problem_data["questions"]):
             question_type = self._normalise_question_type(q_data.get("type", "unknown"))
-            question_id = stable_id(
-                "question", assessment_id, q_index, question_type
-            )
-            q_metadata: Dict[str, Any] = {
+            question_id = stable_id("question", assessment_id, q_index, question_type)
+            q_metadata: dict[str, Any] = {
                 "source_question_id": q_data.get("question_id"),
             }
             if q_data.get("correct_answers"):
@@ -258,9 +251,7 @@ class TransformService:
                 question_type=question_type,
                 prompt_text=q_data.get("prompt", ""),
                 points=q_data.get("points", 1.0),
-                raw_fragment_ids=[comp["raw_fragment_id"]]
-                if comp.get("raw_fragment_id")
-                else [],
+                raw_fragment_ids=[comp["raw_fragment_id"]] if comp.get("raw_fragment_id") else [],
                 metadata=q_metadata,
             )
             questions.append(question)
@@ -275,7 +266,7 @@ class TransformService:
                     )
                 )
 
-    def _transform_moodle(self, parsed: Dict[str, Any], job_id: str) -> Course:
+    def _transform_moodle(self, parsed: dict[str, Any], job_id: str) -> Course:
         source_key = (
             parsed.get("course_id")
             or parsed.get("course_shortname")
@@ -284,11 +275,11 @@ class TransformService:
         )
         course_id = stable_id("course", "moodle", source_key)
         raw_fragments = self._build_raw_fragments(parsed)
-        content_nodes: List[ContentNode] = []
-        assessments: List[Assessment] = []
-        assets: List[Asset] = []
-        questions: List[Question] = []
-        answer_options: List[AnswerOption] = []
+        content_nodes: list[ContentNode] = []
+        assessments: list[Assessment] = []
+        assets: list[Asset] = []
+        questions: list[Question] = []
+        answer_options: list[AnswerOption] = []
 
         question_bank = self._build_question_bank(parsed)
         quiz_activities = self._find_quiz_activities(parsed)
@@ -326,7 +317,7 @@ class TransformService:
             },
         )
 
-    def _build_question_bank(self, parsed: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    def _build_question_bank(self, parsed: dict[str, Any]) -> dict[str, dict[str, Any]]:
         """Build a map from original Moodle question ID to question data."""
         question_bank = {}
         for qa in parsed.get("questions_assessments", []):
@@ -346,7 +337,7 @@ class TransformService:
                 }
         return question_bank
 
-    def _find_quiz_activities(self, parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _find_quiz_activities(self, parsed: dict[str, Any]) -> list[dict[str, Any]]:
         """Find all quiz activities in parsed Moodle data."""
         quiz_activities = []
         for section in parsed.get("sections", []):
@@ -357,27 +348,23 @@ class TransformService:
 
     def _create_quiz_assessments(
         self,
-        parsed: Dict[str, Any],
+        parsed: dict[str, Any],
         course_id: str,
-        quiz_activities: List[Dict[str, Any]],
-        question_bank: Dict[str, Dict[str, Any]],
-        assessments: List[Assessment],
-        questions: List[Question],
-        answer_options: List[AnswerOption],
+        quiz_activities: list[dict[str, Any]],
+        question_bank: dict[str, dict[str, Any]],
+        assessments: list[Assessment],
+        questions: list[Question],
+        answer_options: list[AnswerOption],
     ) -> None:
         """Create Assessment and Question entities for each Moodle quiz."""
         for act in quiz_activities:
             qids = act.get("metadata", {}).get("question_ids", [])
-            questions_for_quiz = [
-                question_bank[qid] for qid in qids if qid in question_bank
-            ]
+            questions_for_quiz = [question_bank[qid] for qid in qids if qid in question_bank]
             if not questions_for_quiz:
                 continue
 
             activity_ref = act.get("cmid") or f"{act.get('title', 'quiz')}:{len(assessments)}"
-            assessment_id = stable_id(
-                "assessment", course_id, "moodle-quiz", activity_ref
-            )
+            assessment_id = stable_id("assessment", course_id, "moodle-quiz", activity_ref)
             assessment = Assessment(
                 assessment_id=assessment_id,
                 course_id=course_id,
@@ -391,13 +378,9 @@ class TransformService:
 
             for q_index, q_data in enumerate(questions_for_quiz):
                 source_question_id = (
-                    q_data.get("original_moodle_id")
-                    or q_data.get("question_id")
-                    or str(q_index)
+                    q_data.get("original_moodle_id") or q_data.get("question_id") or str(q_index)
                 )
-                question_id = stable_id(
-                    "question", assessment_id, source_question_id
-                )
+                question_id = stable_id("question", assessment_id, source_question_id)
                 metadata = dict(q_data.get("metadata") or {})
                 metadata["source_question_id"] = source_question_id
                 if q_data.get("correct_answers"):
@@ -408,9 +391,7 @@ class TransformService:
                 question = Question(
                     question_id=question_id,
                     assessment_id=assessment_id,
-                    question_type=self._normalise_question_type(
-                        q_data["question_type"]
-                    ),
+                    question_type=self._normalise_question_type(q_data["question_type"]),
                     prompt_text=q_data.get("prompt_text", ""),
                     points=q_data.get("points", 1.0),
                     raw_fragment_ids=[],
@@ -432,8 +413,8 @@ class TransformService:
 
     def _build_moodle_content_tree(
         self,
-        parsed: Dict[str, Any],
-        content_nodes: List[ContentNode],
+        parsed: dict[str, Any],
+        content_nodes: list[ContentNode],
         course_id: str,
     ) -> None:
         """Build the Moodle Section -> Activity -> Component hierarchy."""
@@ -468,9 +449,7 @@ class TransformService:
                     title=act.get("title", f"Activity {act_idx + 1}"),
                     parent_id=seq_node.node_id,
                     position=act_idx,
-                    raw_fragment_ids=[act["raw_fragment_id"]]
-                    if act.get("raw_fragment_id")
-                    else [],
+                    raw_fragment_ids=[act["raw_fragment_id"]] if act.get("raw_fragment_id") else [],
                     metadata={
                         "moodle_cmid": act.get("cmid"),
                         "moodle_section_id": section.get("section_id"),
@@ -478,14 +457,12 @@ class TransformService:
                 )
                 seq_node.children.append(vert_node)
                 vert_node.children.append(
-                    self._moodle_component(
-                        act, vert_node, course_id, activity_ref, act_idx
-                    )
+                    self._moodle_component(act, vert_node, course_id, activity_ref, act_idx)
                 )
 
     def _moodle_component(
         self,
-        act: Dict[str, Any],
+        act: dict[str, Any],
         parent: ContentNode,
         course_id: str,
         activity_ref: str,
@@ -611,7 +588,7 @@ class TransformService:
             },
         )
 
-    def _asset_from_dict(self, asset_data: Dict[str, Any], course_id: str) -> Asset:
+    def _asset_from_dict(self, asset_data: dict[str, Any], course_id: str) -> Asset:
         common = {
             "asset_id": asset_data["asset_id"],
             "course_id": course_id,
@@ -637,8 +614,7 @@ class TransformService:
         if asset_data.get("is_scorm") or asset_data.get("original_zip_path"):
             return ScormAsset(
                 **common,
-                original_zip_path=asset_data.get("original_zip_path")
-                or asset_data.get("path", ""),
+                original_zip_path=asset_data.get("original_zip_path") or asset_data.get("path", ""),
                 version=asset_data.get("version", ""),
             )
         return Asset(**common)

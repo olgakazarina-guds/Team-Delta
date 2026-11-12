@@ -1,12 +1,12 @@
 """
-Migration Service – Converts canonical Course entities to target LMS formats.
+Migration Service - Converts canonical Course entities to target LMS formats.
 
 Wraps target adapters to provide a unified migration interface:
 - canonical Course → Open edX (.tar.gz)
 - canonical Course → Moodle (.mbz)
 """
 
-from typing import Any, List, Optional
+from typing import Any
 
 from adapters.moodle.target_adapter import MoodleTargetAdapter
 from adapters.openedx.target_adapter import OpenEdxTargetAdapter
@@ -26,9 +26,9 @@ class MigrationService:
         self,
         course: Course,
         output_path: str,
-        source_extracted_path: Optional[str] = None,
-        job_id: Optional[str] = None,
-        report: Optional[List[Any]] = None,
+        source_extracted_path: str | None = None,
+        job_id: str | None = None,
+        report: list[Any] | None = None,
     ) -> str:
         """Migrate a canonical Course to Open edX format (.tar.gz)."""
         try:
@@ -37,9 +37,7 @@ class MigrationService:
             )
         except Exception as exc:
             if job_id:
-                mark_job_failed(
-                    job_id, f"{type(exc).__name__}: {exc}", owner=self.owner
-                )
+                mark_job_failed(job_id, f"{type(exc).__name__}: {exc}", owner=self.owner)
             raise
         self._persist(
             course,
@@ -55,9 +53,9 @@ class MigrationService:
         self,
         course: Course,
         output_path: str,
-        source_extracted_path: Optional[str] = None,
-        job_id: Optional[str] = None,
-        report: Optional[List[Any]] = None,
+        source_extracted_path: str | None = None,
+        job_id: str | None = None,
+        report: list[Any] | None = None,
     ) -> str:
         """Migrate a canonical Course to Moodle format (.mbz)."""
         try:
@@ -66,9 +64,7 @@ class MigrationService:
             )
         except Exception as exc:
             if job_id:
-                mark_job_failed(
-                    job_id, f"{type(exc).__name__}: {exc}", owner=self.owner
-                )
+                mark_job_failed(job_id, f"{type(exc).__name__}: {exc}", owner=self.owner)
             raise
         self._persist(
             course,
@@ -84,9 +80,9 @@ class MigrationService:
         self,
         course: Course,
         target: str,
-        source_extracted_path: Optional[str],
-        job_id: Optional[str],
-        report: Optional[List[Any]],
+        source_extracted_path: str | None,
+        job_id: str | None,
+        report: list[Any] | None,
         output_path: str,
     ) -> None:
         save_migration_job(

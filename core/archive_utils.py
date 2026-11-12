@@ -106,16 +106,12 @@ def safe_extract_tar(
             destination = _safe_member_path(target, member.name)
             key = str(destination)
             if key in seen:
-                raise ArchiveSecurityError(
-                    f"Archive contains duplicate entry: {member.name!r}"
-                )
+                raise ArchiveSecurityError(f"Archive contains duplicate entry: {member.name!r}")
             seen.add(key)
             if member.issym() or member.islnk():
                 raise ArchiveSecurityError(f"Archive contains a link: {member.name!r}")
             if member.isdev() or member.isfifo():
-                raise ArchiveSecurityError(
-                    f"Archive contains a special entry: {member.name!r}"
-                )
+                raise ArchiveSecurityError(f"Archive contains a special entry: {member.name!r}")
             if not (member.isreg() or member.isdir()):
                 raise ArchiveSecurityError(
                     f"Archive contains an unsupported entry: {member.name!r}"
@@ -167,16 +163,12 @@ def safe_extract_zip(
             destination = _safe_member_path(target, info.filename)
             key = str(destination)
             if key in seen:
-                raise ArchiveSecurityError(
-                    f"Archive contains duplicate entry: {info.filename!r}"
-                )
+                raise ArchiveSecurityError(f"Archive contains duplicate entry: {info.filename!r}")
             seen.add(key)
 
             mode = info.external_attr >> 16
             if stat.S_ISLNK(mode):
-                raise ArchiveSecurityError(
-                    f"Archive contains a symbolic link: {info.filename!r}"
-                )
+                raise ArchiveSecurityError(f"Archive contains a symbolic link: {info.filename!r}")
             if info.flag_bits & 0x1:
                 raise ArchiveSecurityError(
                     f"Encrypted archive member is not supported: {info.filename!r}"
@@ -206,7 +198,10 @@ def safe_extract_zip(
             compressed_size=archive_size,
             limits=cfg,
         )
-        archive.extractall(target)
+        # Every member was validated above; extract one by one so no
+        # unvalidated entry is ever written.
+        for info in infos:
+            archive.extract(info, target)
 
 
 def resolve_under(base: str | Path, relative_path: str | Path) -> Path:

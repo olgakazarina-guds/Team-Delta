@@ -7,8 +7,8 @@ identity header, or run in development mode with the local identity.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 from core.config import Settings, get_settings
 from core.errors import AuthenticationError
@@ -35,8 +35,7 @@ def require_identity(
     if mode == "none":
         if cfg.environment.strip().lower() in PRODUCTION_ENVIRONMENTS:
             raise AuthenticationError(
-                "Authentication is required in production; "
-                "configure a trusted reverse proxy"
+                "Authentication is required in production; configure a trusted reverse proxy"
             )
         return Identity(user_id="local", mode="none")
 
@@ -53,9 +52,7 @@ def require_identity(
                 None,
             )
         if not value or not value.strip():
-            raise AuthenticationError(
-                f"Missing trusted identity header: {header}"
-            )
+            raise AuthenticationError(f"Missing trusted identity header: {header}")
         user_id = value.strip()
         if len(user_id) > 256 or any(ord(char) < 32 for char in user_id):
             raise AuthenticationError("Invalid trusted identity header value")

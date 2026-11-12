@@ -1,5 +1,5 @@
 """
-Open edX Course Parser – Reads Open edX package XMLs and extracts course structure.
+Open edX Course Parser - Reads Open edX package XMLs and extracts course structure.
 
 Parses Open edX .tar.gz course packages and extracts the hierarchical structure:
 course → chapters → sequentials → verticals → components (html, video, problem, etc.)
@@ -8,14 +8,17 @@ Stores raw XML fragments for later domain entity mapping.
 
 import logging
 import mimetypes
-import xml.etree.ElementTree as ET
+
+# XML generation and passthrough only; untrusted parsing goes through core.xml_utils.
+import xml.etree.ElementTree as ET  # nosec B405
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any
 
 from core.archive_utils import resolve_under
 from core.errors import SecurityError, UnsafePathError
 from core.identity import sha256_bytes, stable_id
 from core.xml_utils import parse_xml_file
+
 from .package_reader import OpenEdxPackageReader
 
 logger = logging.getLogger(__name__)
@@ -35,10 +38,10 @@ class OpenEdxCourseParser:
 
     def __init__(self):
         self.reader = OpenEdxPackageReader()
-        self.fragments: List[Dict[str, Any]] = []
+        self.fragments: list[dict[str, Any]] = []
         self._course_key = ""
 
-    def parse(self, archive_path: str, work_dir: str) -> Dict[str, Any]:
+    def parse(self, archive_path: str, work_dir: str) -> dict[str, Any]:
         """Extract an Open edX export and return its structured course data."""
         self.fragments = []
         self._course_key = ""
@@ -84,7 +87,7 @@ class OpenEdxCourseParser:
             "extracted_path": str(extracted_root),
         }
 
-    def _parse_assets(self, extracted_root: Path) -> List[Dict[str, Any]]:
+    def _parse_assets(self, extracted_root: Path) -> list[dict[str, Any]]:
         """Discover files in the export's static/ directory."""
         static_root = extracted_root / "static"
         if not static_root.is_dir():
@@ -98,17 +101,19 @@ class OpenEdxCourseParser:
             mime_type, _ = mimetypes.guess_type(file_path.name)
             is_video = bool(mime_type and mime_type.startswith("video/"))
             checksum = _sha256_file(file_path)
-            assets.append({
-                "asset_id": stable_id(
-                    "asset", "openedx", self._course_key, relative_path, checksum
-                ),
-                "path": relative_path,
-                "original_filename": file_path.name,
-                "mime_type": mime_type,
-                "checksum": checksum,
-                "is_video": is_video,
-                "is_scorm": file_path.suffix.lower() == ".zip",
-            })
+            assets.append(
+                {
+                    "asset_id": stable_id(
+                        "asset", "openedx", self._course_key, relative_path, checksum
+                    ),
+                    "path": relative_path,
+                    "original_filename": file_path.name,
+                    "mime_type": mime_type,
+                    "checksum": checksum,
+                    "is_video": is_video,
+                    "is_scorm": file_path.suffix.lower() == ".zip",
+                }
+            )
         return assets
 
     def _store_fragment(self, file_path: Path, extracted_root: Path) -> str:
@@ -116,33 +121,28 @@ class OpenEdxCourseParser:
         raw_xml = file_path.read_text(encoding="utf-8")
         relative_path = file_path.relative_to(extracted_root).as_posix()
         fragment_id = stable_id("fragment", "openedx", relative_path)
-        self.fragments.append({
-            "fragment_id": fragment_id,
-            "kind": "xml",
-            "source_location": {
-                "source_system": "openedx",
-                "package_path": relative_path,
-                "file_path": str(file_path),
-            },
-            "raw_text": raw_xml,
-            "checksum": sha256_bytes(raw_xml.encode("utf-8")),
-        })
+        self.fragments.append(
+            {
+                "fragment_id": fragment_id,
+                "kind": "xml",
+                "source_location": {
+                    "source_system": "openedx",
+                    "package_path": relative_path,
+                    "file_path": str(file_path),
+                },
+                "raw_text": raw_xml,
+                "checksum": sha256_bytes(raw_xml.encode("utf-8")),
+            }
+        )
         return fragment_id
 
-    def _xml_path(
-        self, extracted_root: Path, folder: str, url_name: str, *, label: str
-    ) -> Path:
+    def _xml_path(self, extracted_root: Path, folder: str, url_name: str, *, label: str) -> Path:
         """Resolve a package XML reference without allowing path traversal."""
-        if (
-            not url_name
-            or "/" in url_name
-            or "\\" in url_name
-            or url_name in {".", ".."}
-        ):
+        if not url_name or "/" in url_name or "\\" in url_name or url_name in {".", ".."}:
             raise UnsafePathError(f"Invalid {label}: {url_name!r}")
         return resolve_under(extracted_root / folder, f"{url_name}.xml")
 
-    def _parse_chapters(self, root: ET.Element, extracted_root: Path) -> List[Dict[str, Any]]:
+    def _parse_chapters(self, root: ET.Element, extracted_root: Path) -> list[dict[str, Any]]:
         """Parse all <chapter> elements from the course file."""
         chapters = []
         for chapter_elem in root.findall("chapter"):
@@ -160,7 +160,7 @@ class OpenEdxCourseParser:
             chapters.append(self._parse_chapter(chapter_file, extracted_root))
         return chapters
 
-    def _parse_chapter(self, chapter_file: Path, extracted_root: Path) -> Dict[str, Any]:
+    def _parse_chapter(self, chapter_file: Path, extracted_root: Path) -> dict[str, Any]:
         """Parse a single chapter XML file."""
         root = parse_xml_file(chapter_file)
         title = root.attrib.get("display_name", "Untitled Chapter")
@@ -188,7 +188,7 @@ class OpenEdxCourseParser:
             "sequentials": sequentials,
         }
 
-    def _parse_sequential(self, seq_file: Path, extracted_root: Path) -> Dict[str, Any]:
+    def _parse_sequential(self, seq_file: Path, extracted_root: Path) -> dict[str, Any]:
         """Parse a single sequential XML file."""
         root = parse_xml_file(seq_file)
         title = root.attrib.get("display_name", "Untitled Sequential")
@@ -216,7 +216,7 @@ class OpenEdxCourseParser:
             "verticals": verticals,
         }
 
-    def _parse_vertical(self, vert_file: Path, extracted_root: Path) -> Dict[str, Any]:
+    def _parse_vertical(self, vert_file: Path, extracted_root: Path) -> dict[str, Any]:
         """Parse a vertical and all of its components."""
         root = parse_xml_file(vert_file)
         title = root.attrib.get("display_name", "Untitled Vertical")
@@ -229,9 +229,7 @@ class OpenEdxCourseParser:
             "components": self._parse_components(root, extracted_root),
         }
 
-    def _parse_components(
-        self, root: ET.Element, extracted_root: Path
-    ) -> List[Dict[str, Any]]:
+    def _parse_components(self, root: ET.Element, extracted_root: Path) -> list[dict[str, Any]]:
         """Parse all component elements within a vertical."""
         components = []
         for comp in root:
@@ -240,7 +238,7 @@ class OpenEdxCourseParser:
             comp_title = comp.attrib.get("display_name", "")
             comp_raw_fragment_id = None
             content_html = None
-            metadata: Dict[str, Any] = {}
+            metadata: dict[str, Any] = {}
 
             comp_file = self._find_component_file(comp_tag, comp_url, extracted_root)
             if comp_file and comp_file.exists():
@@ -261,23 +259,18 @@ class OpenEdxCourseParser:
                         metadata = {
                             "asset_path": self._static_asset_path(scorm_file),
                             "scorm_settings": {
-                                "version": wrapper_root.attrib.get(
-                                    "version_scorm", ""
-                                ),
+                                "version": wrapper_root.attrib.get("version_scorm", ""),
                                 "maxgrade": wrapper_root.attrib.get("weight", ""),
                             },
                         }
                 elif comp_tag == "openassessment":
-                    prompt = self._extract_openassessment_prompt(
-                        wrapper_root, comp
-                    )
+                    prompt = self._extract_openassessment_prompt(wrapper_root, comp)
                     if prompt:
                         content_html = prompt
-                elif comp_tag == "discussion":
-                    if wrapper_root is not None:
-                        description = wrapper_root.findtext("description", "")
-                        if description:
-                            content_html = description
+                elif comp_tag == "discussion" and wrapper_root is not None:
+                    description = wrapper_root.findtext("description", "")
+                    if description:
+                        content_html = description
             elif comp_tag == "openassessment":
                 prompt = self._extract_openassessment_prompt(None, comp)
                 if prompt:
@@ -286,21 +279,23 @@ class OpenEdxCourseParser:
             if comp_tag == "openassessment":
                 metadata["inline_xml"] = ET.tostring(comp, encoding="unicode")
 
-            components.append({
-                "type": comp_tag,
-                "title": comp_title,
-                "url_name": comp_url,
-                "raw_fragment_id": comp_raw_fragment_id,
-                "inline_xml": metadata.pop("inline_xml", None),
-                "content_html": content_html,
-                "metadata": metadata,
-            })
+            components.append(
+                {
+                    "type": comp_tag,
+                    "title": comp_title,
+                    "url_name": comp_url,
+                    "raw_fragment_id": comp_raw_fragment_id,
+                    "inline_xml": metadata.pop("inline_xml", None),
+                    "content_html": content_html,
+                    "metadata": metadata,
+                }
+            )
 
         return components
 
     def _find_component_file(
         self, comp_tag: str, comp_url: str, extracted_root: Path
-    ) -> Optional[Path]:
+    ) -> Path | None:
         """Locate a component XML file based on its tag and url_name."""
         supported = {
             "html",
@@ -314,11 +309,9 @@ class OpenEdxCourseParser:
         }
         if comp_tag not in supported or not comp_url:
             return None
-        return self._xml_path(
-            extracted_root, comp_tag, comp_url, label=f"{comp_tag} url_name"
-        )
+        return self._xml_path(extracted_root, comp_tag, comp_url, label=f"{comp_tag} url_name")
 
-    def _read_wrapper(self, comp_file: Path) -> Optional[ET.Element]:
+    def _read_wrapper(self, comp_file: Path) -> ET.Element | None:
         try:
             return parse_xml_file(comp_file)
         except SecurityError:
@@ -327,7 +320,7 @@ class OpenEdxCourseParser:
             logger.warning("Could not parse component wrapper: %s", comp_file)
             return None
 
-    def _extract_html_content(self, comp_file: Path, extracted_root: Path) -> Optional[str]:
+    def _extract_html_content(self, comp_file: Path, extracted_root: Path) -> str | None:
         """Extract the actual HTML from an html component wrapper."""
         try:
             wrapper_root = parse_xml_file(comp_file)
@@ -346,16 +339,12 @@ class OpenEdxCourseParser:
             logger.warning("Could not read HTML component: %s", comp_file)
             return None
 
-    def _extract_video_metadata(
-        self, wrapper_root: Optional[ET.Element]
-    ) -> Dict[str, Any]:
+    def _extract_video_metadata(self, wrapper_root: ET.Element | None) -> dict[str, Any]:
         if wrapper_root is None:
             return {}
 
         youtube_id = (
-            wrapper_root.attrib.get("youtube_id_1_0")
-            or wrapper_root.attrib.get("youtube_id")
-            or ""
+            wrapper_root.attrib.get("youtube_id_1_0") or wrapper_root.attrib.get("youtube_id") or ""
         )
         if not youtube_id:
             youtube_attr = wrapper_root.attrib.get("youtube", "")
@@ -393,8 +382,8 @@ class OpenEdxCourseParser:
         return f"static/{clean}" if clean else ""
 
     def _extract_openassessment_prompt(
-        self, wrapper_root: Optional[ET.Element], inline_element: ET.Element
-    ) -> Optional[str]:
+        self, wrapper_root: ET.Element | None, inline_element: ET.Element
+    ) -> str | None:
         root = wrapper_root if wrapper_root is not None else inline_element
         prompts = []
         for prompt in root.findall(".//prompt"):

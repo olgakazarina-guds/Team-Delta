@@ -16,9 +16,7 @@ def _job_id(output: str) -> str:
     return match.group(1)
 
 
-def test_inspect_auto_detects_moodle_and_saves_json(
-    moodle_archive: Path, tmp_path: Path
-):
+def test_inspect_auto_detects_moodle_and_saves_json(moodle_archive: Path, tmp_path: Path):
     report_path = tmp_path / "inspection.json"
 
     result = runner.invoke(
@@ -81,9 +79,7 @@ def test_migrate_end_to_end(
     assert _job_id(result.output)
 
 
-def test_report_command_renders_json_and_html(
-    openedx_archive: Path, tmp_path: Path
-):
+def test_report_command_renders_json_and_html(openedx_archive: Path, tmp_path: Path):
     inspect_result = runner.invoke(
         app,
         ["inspect", str(openedx_archive), "--source", "openedx"],
@@ -142,9 +138,7 @@ def test_migrate_unsupported_target_fails(openedx_archive: Path, tmp_path: Path)
 
 
 def test_report_missing_job_fails():
-    result = runner.invoke(
-        app, ["report", "00000000-0000-0000-0000-000000000000"]
-    )
+    result = runner.invoke(app, ["report", "00000000-0000-0000-0000-000000000000"])
 
     assert result.exit_code == 1
 

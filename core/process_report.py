@@ -30,8 +30,7 @@ import logging
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import List, Optional
+from enum import StrEnum
 
 from rich.console import Console
 from rich.table import Table
@@ -39,7 +38,7 @@ from rich.table import Table
 _log = logging.getLogger("lms_convert.process")
 
 
-class StepStatus(str, Enum):
+class StepStatus(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"
 
@@ -47,6 +46,7 @@ class StepStatus(str, Enum):
 @dataclass
 class ProcessStep:
     """One recorded step: what it was, how it ended, how long it took."""
+
     name: str
     status: StepStatus
     duration_s: float
@@ -68,8 +68,9 @@ class ProcessReporter:
         finally:
             reporter.render()      # always show what happened
     """
+
     title: str = "CLI process"
-    steps: List[ProcessStep] = field(default_factory=list)
+    steps: list[ProcessStep] = field(default_factory=list)
 
     @contextmanager
     def step(self, name: str):
@@ -80,9 +81,9 @@ class ProcessReporter:
             yield
         except Exception as exc:
             duration = time.perf_counter() - start
-            self.steps.append(ProcessStep(
-                name, StepStatus.FAILED, duration, f"{type(exc).__name__}: {exc}"
-            ))
+            self.steps.append(
+                ProcessStep(name, StepStatus.FAILED, duration, f"{type(exc).__name__}: {exc}")
+            )
             _log.error("✗ %s failed after %.3fs - %s", name, duration, exc)
             raise
         else:
@@ -93,15 +94,13 @@ class ProcessReporter:
     @property
     def succeeded(self) -> bool:
         """True only if every recorded step succeeded (and at least one ran)."""
-        return bool(self.steps) and all(
-            s.status is StepStatus.SUCCESS for s in self.steps
-        )
+        return bool(self.steps) and all(s.status is StepStatus.SUCCESS for s in self.steps)
 
     @property
     def total_duration_s(self) -> float:
         return sum(s.duration_s for s in self.steps)
 
-    def render(self, console: Optional[Console] = None) -> None:
+    def render(self, console: Console | None = None) -> None:
         """Print a summary table of every step and the overall outcome."""
         console = console or Console()
         table = Table(title=self.title, show_lines=False)
@@ -133,6 +132,5 @@ class ProcessReporter:
         else:
             failed = sum(1 for s in self.steps if s.status is StepStatus.FAILED)
             console.print(
-                f"[bold red]Process failed[/bold red] - "
-                f"{failed} of {len(self.steps)} steps failed"
+                f"[bold red]Process failed[/bold red] - {failed} of {len(self.steps)} steps failed"
             )

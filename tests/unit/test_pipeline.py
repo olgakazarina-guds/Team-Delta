@@ -22,7 +22,9 @@ def test_openedx_parse_and_transform(openedx_archive: Path, tmp_path: Path):
     course = TransformService().transform(parsed, "openedx", "job-openedx")
 
     nodes = list(_all_nodes(course.content_nodes))
-    assert any(n.node_type.value == "html" and "Hello" in n.metadata.get("content_html", "") for n in nodes)
+    assert any(
+        n.node_type.value == "html" and "Hello" in n.metadata.get("content_html", "") for n in nodes
+    )
     video = next(n for n in nodes if n.node_type.value == "video")
     assert video.metadata["youtube_id"] == "abc12345678"
     assert any(n.node_type.value == "forum" for n in nodes)
@@ -143,9 +145,7 @@ def test_moodle_to_moodle_target(moodle_archive: Path, tmp_path: Path):
 
     files_root = ET.parse(extract_dir / "files.xml").getroot()
     all_file_records = files_root.findall("file")
-    file_records = [
-        record for record in all_file_records if record.findtext("filename") != "."
-    ]
+    file_records = [record for record in all_file_records if record.findtext("filename") != "."]
     directory_records = [
         record for record in all_file_records if record.findtext("filename") == "."
     ]
@@ -156,9 +156,7 @@ def test_moodle_to_moodle_target(moodle_archive: Path, tmp_path: Path):
         "clip.mp4",
         "package.zip",
     }
-    records_by_name = {
-        record.findtext("filename"): record for record in file_records
-    }
+    records_by_name = {record.findtext("filename"): record for record in file_records}
     for record in file_records:
         contenthash = record.findtext("contenthash")
         assert (extract_dir / "files" / contenthash[:2] / contenthash).exists()

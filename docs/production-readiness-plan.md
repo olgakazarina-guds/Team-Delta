@@ -35,7 +35,7 @@ Status as of 2026-11-11.
 | Security and input controls | Complete | Committed in `235b2f5`; bounded uploads, archive and XML limits, output containment, production auth, owner-scoped jobs, and sanitized UI errors | Add container and supply-chain controls |
 | Persistence | Partial | SQLite job records, lifecycle states, and owner field exist | Add schema versioning, stop running DDL on reads, add retention and backup/restore tests |
 | Migration fidelity | Partial | Canonical model, Moodle/Open edX adapters, validation notes, and JSON/HTML reports exist | Build a golden corpus, real-LMS import harness, and versioned fidelity scorecard |
-| Testing and CI | Partial | 68 tests pass locally, including integration, CLI end-to-end, Streamlit smoke, and legacy schema migration; no real-LMS tests; no CI pipeline | Add coverage policy, linting, type checking, and CI gates |
+| Testing and CI | In progress | 68 tests with an 80% coverage floor enforced; ruff, mypy, bandit, pip-audit, build, clean wheel install, and CLI smoke test all pass locally; GitHub Actions workflow added | Verify the first CI run from a clean checkout; add nightly performance and fuzz layers |
 | Operations | Not started | No deployment runbook, health checks, metrics, or container image | Add observability, deployment artifacts, backup/restore drill, and operator documentation |
 | Documentation | Partial | README, security policy, contribution guide, changelog, license, and architecture diagram exist | Add architecture reference, deployment runbook, format matrix, and release checklist |
 | Real-LMS certification | Not started | No live Moodle or Open edX environment available | Provision pinned test environments and run import certification |
@@ -167,6 +167,8 @@ R = responsible, A = accountable, C = consulted, I = informed.
 | LMS certification | Pinned Moodle and Open edX import checks | Nightly and release |
 
 ### CI gates
+
+Implemented in `.github/workflows/ci.yml` for gates 1-9; gate 10 follows PR-08.
 
 1. `uv sync --frozen --group dev`
 2. `ruff check` and `ruff format --check`

@@ -19,10 +19,12 @@ Usage:
 """
 
 import logging
-import xml.etree.ElementTree as ET
-from pathlib import Path
-from typing import Any, Dict, List, Optional
 import os
+
+# XML generation and passthrough only; untrusted parsing goes through core.xml_utils.
+import xml.etree.ElementTree as ET  # nosec B405
+from pathlib import Path
+from typing import Any
 
 from core.archive_utils import resolve_under, safe_extract_tar, safe_extract_zip
 from core.errors import SecurityError
@@ -30,8 +32,8 @@ from core.xml_utils import parse_xml_file
 
 logger = logging.getLogger(__name__)
 
-class MoodleBackupReader:
 
+class MoodleBackupReader:
     def extract_archive(self, mbz_path: str, workdir: str) -> Path:
         """
         Extract the .mbz archive (which can be .tar.gz or .zip) into work_dir
@@ -46,9 +48,9 @@ class MoodleBackupReader:
         target_path.mkdir(parents=True, exist_ok=True)
 
         # Detect archive type by reading magic bytes
-        with open(mbz_path, 'rb') as f:
+        with open(mbz_path, "rb") as f:
             header = f.read(2)
-            is_gzip = (header == b'\x1f\x8b')
+            is_gzip = header == b"\x1f\x8b"
 
         if is_gzip:
             logger.debug("Detected Gzip, extracting: %s", mbz_path)
@@ -58,13 +60,13 @@ class MoodleBackupReader:
             safe_extract_zip(mbz_path, target_path)
 
         # Locate the directory containing moodle_backup.xml
-        for root, dirs, files in os.walk(target_path):
+        for root, _dirs, files in os.walk(target_path):
             if "moodle_backup.xml" in files:
                 return Path(root)
 
         raise FileNotFoundError("moodle_backup.xml not found in extracted archive")
 
-    def read_manifest(self, extracted: Path) -> Dict[str, Any]:
+    def read_manifest(self, extracted: Path) -> dict[str, Any]:
         """
         Parse moodle_backup.xml and return a structured manifest dict with:
         - course_info:   basic course title and directory from the manifest header
@@ -81,14 +83,14 @@ class MoodleBackupReader:
         if information is None:
             information = root
 
-        course_information: Dict[str, Any] = {}
+        course_information: dict[str, Any] = {}
         course_element = information.find(".//contents/course")
         if course_element is not None:
             course_information["title"] = course_element.findtext("title", "")
             course_information["course_id"] = course_element.findtext("courseid", "")
             course_information["directory"] = course_element.findtext("directory", "course")
 
-        activities: Dict[str, Any] = {}
+        activities: dict[str, Any] = {}
         for activity in information.findall(".//contents/activities/activity"):
             cmid = activity.findtext("moduleid") or activity.findtext("cmid")
             if not cmid:
@@ -96,20 +98,24 @@ class MoodleBackupReader:
 
             activities[cmid] = {
                 "cmid": cmid,
-                "module_name": activity.findtext("modulename", "") or activity.findtext("module_name", ""),
+                "module_name": activity.findtext("modulename", "")
+                or activity.findtext("module_name", ""),
                 "title": activity.findtext("title", ""),
                 "directory": activity.findtext("directory", ""),
-                "section_id": activity.findtext("sectionid", "") or activity.findtext("section_id", ""),
+                "section_id": activity.findtext("sectionid", "")
+                or activity.findtext("section_id", ""),
             }
 
-        sections: List[Dict[str, Any]] = []
+        sections: list[dict[str, Any]] = []
         for section in information.findall(".//contents/sections/section"):
-            sections.append({
-                "section_id": section.findtext("sectionid")
-                or section.findtext("section_id", ""),
-                "title": section.findtext("title", ""),
-                "directory": section.findtext("directory", ""),
-            })
+            sections.append(
+                {
+                    "section_id": section.findtext("sectionid")
+                    or section.findtext("section_id", ""),
+                    "title": section.findtext("title", ""),
+                    "directory": section.findtext("directory", ""),
+                }
+            )
 
         return {
             "course_info": course_information,
@@ -119,7 +125,7 @@ class MoodleBackupReader:
         }
 
     # Parse files.xml
-    def read_file_records(self, extracted: Path) -> Dict[str, Any]:
+    def read_file_records(self, extracted: Path) -> dict[str, Any]:
         """
         Parse files.xml (the global file table at the backup root) and return a dict
         keyed by file id -> {contenthash, filename, mimetype, filepath}.
@@ -136,7 +142,7 @@ class MoodleBackupReader:
             return {}
 
         root = parse_xml_file(files_xml)
-        records: Dict[str, Any] = {}
+        records: dict[str, Any] = {}
         for record in root.findall("file"):
             file_id = record.get("id") or record.findtext("id")
             if not file_id:
@@ -150,7 +156,7 @@ class MoodleBackupReader:
             }
         return records
 
-    def read_xml(self, extracted: Path, relative_path: str) -> Optional[ET.Element]:
+    def read_xml(self, extracted: Path, relative_path: str) -> ET.Element | None:
         """
         Parse an XML file within the extracted archive and return its root Element.
 
@@ -168,7 +174,7 @@ class MoodleBackupReader:
             logger.warning("Malformed XML skipped: %s", xml_path)
             return None
 
-    def read_raw_text(self, extracted: Path, relative_path: str) -> Optional[str]:
+    def read_raw_text(self, extracted: Path, relative_path: str) -> str | None:
         """
         Read an XML file as a raw UTF-8 string and return it unchanged.
 
@@ -181,7 +187,7 @@ class MoodleBackupReader:
             return None
         return xml_path.read_text(encoding="utf-8")
 
-    def read_file_bytes(self, extracted: Path, contenthash: str) -> Optional[bytes]:
+    def read_file_bytes(self, extracted: Path, contenthash: str) -> bytes | None:
         """
         Read a content file from the content-addressed store at files/HH/FULLHASH.
 
@@ -195,14 +201,12 @@ class MoodleBackupReader:
         if not contenthash or len(contenthash) < 2:
             return None
         try:
-            file_path = resolve_under(
-                extracted, f"files/{contenthash[:2]}/{contenthash}"
-            )
+            file_path = resolve_under(extracted, f"files/{contenthash[:2]}/{contenthash}")
             return file_path.read_bytes()
         except FileNotFoundError:
             return None
 
-    def read_inforef(self, extracted: Path, activity_directory: str) -> List[str]:
+    def read_inforef(self, extracted: Path, activity_directory: str) -> list[str]:
         """
         Return the list of file IDs referenced by an activity's inforef.xml.
 
@@ -215,8 +219,4 @@ class MoodleBackupReader:
         root = self.read_xml(extracted, f"{activity_directory}/inforef.xml")
         if root is None:
             return []
-        return [
-            fid for f in root.findall(".//file")
-            if (fid := f.findtext("id", ""))
-        ]
-
+        return [fid for f in root.findall(".//file") if (fid := f.findtext("id", ""))]

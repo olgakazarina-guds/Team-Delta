@@ -1,22 +1,26 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List
-from domain.entities import Course, RawFragment
+from typing import Any
+
+from domain.entities import Course
+from domain.raw_fragment import RawFragment
+
 
 class SourceAdapter(ABC):
     @abstractmethod
-    def parse(self, source_path: str) -> Dict[str, Any]:
+    def parse(self, source_path: str) -> dict[str, Any]:
         """Extract raw structure and return a dict with parsed data and fragments."""
         pass
 
     @abstractmethod
-    def to_canonical(self, parsed: Dict[str, Any]) -> Course:
+    def to_canonical(self, parsed: dict[str, Any]) -> Course:
         """Convert parsed dict to a canonical Course object."""
         pass
 
     @abstractmethod
-    def get_raw_fragments(self, parsed: Dict[str, Any]) -> List[RawFragment]:
+    def get_raw_fragments(self, parsed: dict[str, Any]) -> list[RawFragment]:
         """Return list of raw fragments extracted during parse."""
         pass
+
 
 class TargetAdapter(ABC):
     @abstractmethod

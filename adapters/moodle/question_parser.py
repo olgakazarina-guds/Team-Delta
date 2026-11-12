@@ -1,5 +1,5 @@
 """
-Moodle Question Parser – Reads questions.xml and creates canonical assessment dicts.
+Moodle Question Parser - Reads questions.xml and creates canonical assessment dicts.
 
 Parses Moodle's question bank XML format and extracts questions with their
 answer options, converting them into a structure that TransformService can
@@ -9,14 +9,16 @@ Supports question types: multichoice, truefalse, shortanswer, numerical,
 essay, description.
 """
 
-import xml.etree.ElementTree as ET
 import uuid
-from typing import Any, Dict, List
+
+# XML generation and passthrough only; untrusted parsing goes through core.xml_utils.
+import xml.etree.ElementTree as ET  # nosec B405
+from typing import Any
 
 from core.xml_utils import parse_xml_file
 
 
-def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
+def parse_questions(questions_xml_path: str) -> list[dict[str, Any]]:
     """Parse Moodle questions.xml and return one assessment dict per question."""
     root = parse_xml_file(questions_xml_path)
     assessments = []
@@ -32,20 +34,19 @@ def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
         name = q_elem.findtext("name", "").strip()
         questiontext_elem = q_elem.find("questiontext")
         questiontext = (
-            "".join(questiontext_elem.itertext()).strip()
-            if questiontext_elem is not None
-            else ""
+            "".join(questiontext_elem.itertext()).strip() if questiontext_elem is not None else ""
         )
 
         defaultmark_elem = q_elem.find("defaultmark")
+        defaultmark_text = defaultmark_elem.text if defaultmark_elem is not None else None
         try:
-            points = float(defaultmark_elem.text) if defaultmark_elem is not None else 1.0
-        except (TypeError, ValueError):
+            points = float(defaultmark_text) if defaultmark_text is not None else 1.0
+        except ValueError:
             points = 1.0
 
-        answer_options: List[Dict[str, Any]] = []
-        correct_answers: List[str] = []
-        metadata: Dict[str, Any] = {}
+        answer_options: list[dict[str, Any]] = []
+        correct_answers: list[str] = []
+        metadata: dict[str, Any] = {}
         canonical_type = q_type
 
         if q_type == "multichoice":
@@ -59,10 +60,12 @@ def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
                     fraction = _fraction(ans)
                     if not text:
                         continue
-                    answer_options.append({
-                        "text": text,
-                        "is_correct": fraction > 0,
-                    })
+                    answer_options.append(
+                        {
+                            "text": text,
+                            "is_correct": fraction > 0,
+                        }
+                    )
                     if fraction > 0:
                         correct_answers.append(text)
             canonical_type = "multichoice" if single else "multiselect"
@@ -75,10 +78,12 @@ def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
                     if not text:
                         continue
                     is_correct = _fraction(ans) > 0
-                    answer_options.append({
-                        "text": text,
-                        "is_correct": is_correct,
-                    })
+                    answer_options.append(
+                        {
+                            "text": text,
+                            "is_correct": is_correct,
+                        }
+                    )
                     if is_correct:
                         correct_answers.append(text)
 
@@ -90,10 +95,12 @@ def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
                     if not text:
                         continue
                     fraction = _fraction(ans)
-                    answer_options.append({
-                        "text": text,
-                        "is_correct": fraction > 0,
-                    })
+                    answer_options.append(
+                        {
+                            "text": text,
+                            "is_correct": fraction > 0,
+                        }
+                    )
                     if fraction > 0:
                         correct_answers.append(text)
 
@@ -105,10 +112,12 @@ def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
                     if not text:
                         continue
                     fraction = _fraction(ans)
-                    answer_options.append({
-                        "text": text,
-                        "is_correct": fraction > 0,
-                    })
+                    answer_options.append(
+                        {
+                            "text": text,
+                            "is_correct": fraction > 0,
+                        }
+                    )
                     if fraction > 0:
                         correct_answers.append(text)
                         metadata.setdefault("correct_answer", text)
@@ -131,13 +140,15 @@ def parse_questions(questions_xml_path: str) -> List[Dict[str, Any]]:
         }
 
         assessment_id = str(uuid.uuid4())
-        assessments.append({
-            "assessment_id": assessment_id,
-            "title": name if name else f"Question {q_id}",
-            "assessment_type": "quiz",
-            "questions": [question],
-            "original_question_ids": [q_id],
-        })
+        assessments.append(
+            {
+                "assessment_id": assessment_id,
+                "title": name if name else f"Question {q_id}",
+                "assessment_type": "quiz",
+                "questions": [question],
+                "original_question_ids": [q_id],
+            }
+        )
 
     return assessments
 

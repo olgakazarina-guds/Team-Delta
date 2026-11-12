@@ -4,8 +4,6 @@ import tarfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import pytest
-
 from adapters.moodle.target_adapter import MoodleTargetAdapter
 from adapters.openedx.target_adapter import OpenEdxTargetAdapter
 from core.parse import ParseService
@@ -33,9 +31,7 @@ def _all_node_ids(nodes):
         yield from _all_node_ids(node.children)
 
 
-def test_moodle_page_roundtrip_does_not_duplicate_body(
-    moodle_archive: Path, tmp_path: Path
-):
+def test_moodle_page_roundtrip_does_not_duplicate_body(moodle_archive: Path, tmp_path: Path):
     parsed = ParseService().parse(str(moodle_archive), "moodle", str(tmp_path / "extract"))
     course = TransformService().transform(parsed, "moodle", "job-page")
     output = Path(
@@ -89,17 +85,12 @@ def test_truefalse_answers_are_mapped_by_text_not_position(tmp_path: Path):
         ],
     )
 
-    output = Path(
-        MoodleTargetAdapter().generate_backup(course, str(tmp_path / "tf.mbz"))
-    )
+    output = Path(MoodleTargetAdapter().generate_backup(course, str(tmp_path / "tf.mbz")))
     root = _extract(output, tmp_path / "tf-out")
     questions = ET.parse(root / "questions.xml").getroot()
     plugin = questions.find(".//plugin_qtype_truefalse_question")
     assert plugin is not None
-    answers = {
-        answer.findtext("answertext"): answer
-        for answer in plugin.findall(".//answer")
-    }
+    answers = {answer.findtext("answertext"): answer for answer in plugin.findall(".//answer")}
     truefalse = plugin.find("truefalse")
     assert truefalse is not None
     assert truefalse.findtext("trueanswer") == answers["True"].get("id")
@@ -139,29 +130,21 @@ def test_target_does_not_emit_duplicate_question_ids(tmp_path: Path):
         questions=questions,
     )
 
-    output = Path(
-        MoodleTargetAdapter().generate_backup(course, str(tmp_path / "dup.mbz"))
-    )
+    output = Path(MoodleTargetAdapter().generate_backup(course, str(tmp_path / "dup.mbz")))
     root = _extract(output, tmp_path / "dup-out")
     qroot = ET.parse(root / "questions.xml").getroot()
     ids = [question.get("id") for question in qroot.findall(".//question")]
     assert len(ids) == len(set(ids))
 
 
-def test_openedx_identity_is_stable_across_job_ids(
-    openedx_archive: Path, tmp_path: Path
-):
+def test_openedx_identity_is_stable_across_job_ids(openedx_archive: Path, tmp_path: Path):
     parsed = ParseService().parse(str(openedx_archive), "openedx", str(tmp_path / "extract"))
     first = TransformService().transform(parsed, "openedx", "job-one")
     second = TransformService().transform(parsed, "openedx", "job-two")
 
     assert first.course_id == second.course_id
-    assert list(_all_node_ids(first.content_nodes)) == list(
-        _all_node_ids(second.content_nodes)
-    )
-    assert [q.question_id for q in first.questions] == [
-        q.question_id for q in second.questions
-    ]
+    assert list(_all_node_ids(first.content_nodes)) == list(_all_node_ids(second.content_nodes))
+    assert [q.question_id for q in first.questions] == [q.question_id for q in second.questions]
     assert [a.assessment_id for a in first.assessments] == [
         a.assessment_id for a in second.assessments
     ]
@@ -187,17 +170,13 @@ def test_openedx_export_preserves_nested_asset_paths(tmp_path: Path):
     )
 
     output = Path(
-        OpenEdxTargetAdapter().generate_export(
-            course, str(tmp_path / "assets.tar.gz"), str(source)
-        )
+        OpenEdxTargetAdapter().generate_export(course, str(tmp_path / "assets.tar.gz"), str(source))
     )
     root = _extract(output, tmp_path / "assets-out")
     assert (root / "static" / "sub" / "img.png").read_bytes() == b"image"
 
 
-def test_moodle_adapter_can_be_reused_without_state_leak(
-    moodle_archive: Path, tmp_path: Path
-):
+def test_moodle_adapter_can_be_reused_without_state_leak(moodle_archive: Path, tmp_path: Path):
     parsed = ParseService().parse(str(moodle_archive), "moodle", str(tmp_path / "extract"))
     course = TransformService().transform(parsed, "moodle", "job-reuse")
     adapter = MoodleTargetAdapter()
@@ -210,6 +189,4 @@ def test_moodle_adapter_can_be_reused_without_state_leak(
     assert len(list(first_root.glob("sections/section_*"))) == len(
         list(second_root.glob("sections/section_*"))
     )
-    assert len(list(first_root.glob("activities/*"))) == len(
-        list(second_root.glob("activities/*"))
-    )
+    assert len(list(first_root.glob("activities/*"))) == len(list(second_root.glob("activities/*")))
