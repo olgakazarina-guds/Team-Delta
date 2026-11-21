@@ -45,7 +45,7 @@ class OpenEdxCourseParser:
         """Extract an Open edX export and return its structured course data."""
         self.fragments = []
         self._course_key = ""
-        extracted_root = self.reader.extract(archive_path, work_dir)
+        extracted_root = self.reader.extract(archive_path, work_dir).resolve()
 
         root_course_xml = extracted_root / "course.xml"
         if root_course_xml.exists():

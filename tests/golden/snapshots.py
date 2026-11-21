@@ -32,6 +32,12 @@ VOLATILE_PATHS = frozenset(
         "question_categories/question_category/questions/question/timecreated",
         "question_categories/question_category/questions/question/timemodified",
         "question_categories/question_category/questions/question/version",
+        "question_categories/question_category/question_bank_entries/question_bank_entry/"
+        "question_version/question_versions/questions/question/stamp",
+        "question_categories/question_category/question_bank_entries/question_bank_entry/"
+        "question_version/question_versions/questions/question/timecreated",
+        "question_categories/question_category/question_bank_entries/question_bank_entry/"
+        "question_version/question_versions/questions/question/timemodified",
         "question_categories/question_category/stamp",
         "section/timemodified",
     }

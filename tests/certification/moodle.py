@@ -227,6 +227,7 @@ class MoodleTarget:
                 "admin/cli/restore_backup.php",
                 "--file=/tmp/certification-import.mbz",
                 "--categoryid=1",
+                "--showdebugging",
             ],
             work_dir,
             "restore.log",

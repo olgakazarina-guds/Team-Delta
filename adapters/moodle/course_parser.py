@@ -484,21 +484,30 @@ class MoodleCourseParser:
         title = inner.findtext("name", activity_info.get("title", ""))
         intro = inner.findtext("intro", "")
 
-        # Collect question IDs from <question_instance> elements
-        question_ids = []
+        # Moodle 4.0+ stores the question link in a nested <question_reference>;
+        # older backups stored a direct <questionid> under each instance.
+        question_refs = []
         for qi in inner.findall(".//question_instance"):
             qid = qi.findtext("questionid")
             if qid:
-                question_ids.append(qid)
+                question_refs.append({"kind": "question", "id": qid})
+                continue
+            reference = qi.find("question_reference")
+            entry_id = reference.findtext("questionbankentryid") if reference is not None else None
+            if entry_id:
+                question_refs.append({"kind": "question_bank_entry", "id": entry_id})
 
+        metadata = {
+            "question_ids": [ref["id"] for ref in question_refs if ref["kind"] == "question"],
+            "quiz_id": inner.findtext("id"),
+        }
+        if any(ref["kind"] == "question_bank_entry" for ref in question_refs):
+            metadata["question_refs"] = question_refs
         return {
             "title": title,
             "node_type": NodeType.QUIZ.value,
             "content_html": intro,
-            "metadata": {
-                "question_ids": question_ids,
-                "quiz_id": inner.findtext("id"),
-            },
+            "metadata": metadata,
         }
 
     def _parse_resource(self, root, activity_info, extracted, manifest, assessments, assets):

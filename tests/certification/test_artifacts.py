@@ -21,6 +21,23 @@ def test_builds_a_target_artifact_from_the_golden_corpus(tmp_path: Path):
     assert artifact.size_bytes == artifact.path.stat().st_size
 
 
+@pytest.mark.parametrize(
+    ("case_id", "target"),
+    [("moodle/core", "openedx"), ("openedx/core", "moodle")],
+)
+def test_builds_artifacts_with_a_relative_workspace(
+    case_id: str, target: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.chdir(tmp_path)
+    manifest = load_manifest()
+    case = next(case for case in valid_cases(manifest) if case["id"] == case_id)
+
+    artifact = build_golden_artifact(case, target, Path("workspace"))
+
+    assert artifact.path.is_absolute()
+    assert artifact.path.is_file()
+
+
 def test_rejects_a_target_that_the_case_does_not_generate(tmp_path: Path):
     manifest = load_manifest()
     case = next(case for case in valid_cases(manifest) if case["id"] == "moodle/core")

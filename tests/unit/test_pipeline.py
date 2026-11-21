@@ -77,7 +77,15 @@ def test_openedx_to_moodle_target(openedx_archive: Path, tmp_path: Path):
     with tarfile.open(output, "r:gz") as archive:
         archive.extractall(extract_dir, filter="data")
 
-    manifest = ET.parse(extract_dir / "moodle_backup.xml").getroot()
+    manifest_path = extract_dir / "moodle_backup.xml"
+    assert manifest_path.read_text(encoding="utf-8").startswith(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+    )
+    assert (extract_dir / "course" / "roles.xml").is_file()
+    for activity_dir in (extract_dir / "activities").iterdir():
+        assert (activity_dir / "roles.xml").is_file()
+        assert (activity_dir / "grades.xml").is_file()
+    manifest = ET.parse(manifest_path).getroot()
     activities = manifest.findall(".//contents/activities/activity")
     assert activities
     section_files = list((extract_dir / "sections").glob("section_*/section.xml"))
@@ -86,10 +94,113 @@ def test_openedx_to_moodle_target(openedx_archive: Path, tmp_path: Path):
     assert section.findtext("sequence")
     questions = ET.parse(extract_dir / "questions.xml").getroot()
     assert questions.tag == "question_categories"
-    assert questions.findall(".//question")
+    categories = questions.findall("question_category")
+    assert len(categories) >= 2
+    top_category = next(category for category in categories if category.findtext("parent") == "0")
+    assert top_category.find("question_bank_entries") is not None
+    assert not top_category.findall(".//question")
+    child_categories = [
+        category for category in categories if category.findtext("parent") == top_category.get("id")
+    ]
+    assert child_categories
+    for category in child_categories:
+        assert category.findtext("contextid")
+        assert category.findtext("contextlevel") == "50"
+    entries = questions.findall("question_category/question_bank_entries/question_bank_entry")
+    assert entries
+    for entry in entries:
+        assert entry.findtext("questioncategoryid")
+        version = entry.find("question_version/question_versions")
+        assert version is not None
+        assert version.findtext("version")
+        assert version.findtext("status") == "ready"
+        question = version.find("questions/question")
+        assert question is not None
+        assert question.findtext("qtype")
+        assert question.find("version") is None
+        assert question.find("hidden") is None
+
+    course_root = ET.parse(extract_dir / "course" / "course.xml").getroot()
+    assert course_root.get("contextid") == course_root.get("id")
+    course_inforef = ET.parse(extract_dir / "course" / "inforef.xml").getroot()
+    referenced_files = {
+        file_ref.findtext("id") for file_ref in course_inforef.findall("fileref/file")
+    }
+    referenced_categories = {
+        category_ref.findtext("id")
+        for category_ref in course_inforef.findall("question_categoryref/question_category")
+    }
+    assert referenced_files
+    assert referenced_categories == {category.get("id") for category in categories}
 
     files_root = ET.parse(extract_dir / "files.xml").getroot()
-    assert "handout.pdf" in {record.findtext("filename") for record in files_root.findall("file")}
+    file_records = files_root.findall("file")
+    assert "handout.pdf" in {record.findtext("filename") for record in file_records}
+    handout = next(
+        record for record in file_records if record.findtext("filename") == "handout.pdf"
+    )
+    assert handout.findtext("component") == "course"
+    assert handout.findtext("filearea") == "summary"
+    assert handout.findtext("contextid") == course_root.get("id")
+    assert handout.get("id") in referenced_files
+
+    module_context_ids = {
+        ET.parse(activity).getroot().get("contextid")
+        for activity in (extract_dir / "activities").glob("*/module.xml")
+    }
+    module_files = [
+        record for record in file_records if (record.findtext("component") or "").startswith("mod_")
+    ]
+    for record in module_files:
+        assert record.findtext("contextid") in module_context_ids
+
+    forum_settings = ET.parse(next(extract_dir.glob("activities/forum_*/forum.xml"))).getroot()
+    assert forum_settings.findtext("forum/assesstimestart") == "0"
+    assert forum_settings.findtext("forum/assesstimefinish") == "0"
+
+    workshop_settings = ET.parse(
+        next(extract_dir.glob("activities/workshop_*/workshop.xml"))
+    ).getroot()
+    assert workshop_settings.findtext("workshop/strategy") == "accumulative"
+    assert workshop_settings.findtext("workshop/submissionstart") == "0"
+    assert workshop_settings.findtext("workshop/assessmentend") == "0"
+
+    for quiz_file in (extract_dir / "activities").glob("quiz_*/quiz.xml"):
+        activity = ET.parse(quiz_file).getroot()
+        quiz_settings = activity.find("quiz")
+        assert quiz_settings is not None
+        assert quiz_settings.findtext("password") == ""
+        assert quiz_settings.findtext("subnet") == ""
+        assert quiz_settings.findtext("browsersecurity") == "-"
+        instances = quiz_settings.findall("question_instances/question_instance")
+        assert instances
+        for instance in instances:
+            reference = instance.find("question_reference")
+            assert reference is not None
+            assert instance.find("questionid") is None
+            assert reference.findtext("component") == "mod_quiz"
+            assert reference.findtext("questionarea") == "slot"
+            assert reference.findtext("usingcontextid") == activity.get("contextid")
+            assert reference.findtext("questionbankentryid") in {
+                entry.get("id") for entry in entries
+            }
+
+
+def test_generated_moodle_quiz_references_survive_reparse(openedx_archive: Path, tmp_path: Path):
+    parsed = ParseService().parse(str(openedx_archive), "openedx", str(tmp_path / "extract"))
+    course = TransformService().transform(parsed, "openedx", "job-openedx")
+    output = Path(
+        MoodleTargetAdapter().generate_backup(
+            course, str(tmp_path / "out.mbz"), parsed["extracted_path"]
+        )
+    )
+
+    reparsed = ParseService().parse(str(output), "moodle", str(tmp_path / "reparse"))
+    roundtrip = TransformService().transform(reparsed, "moodle", "job-roundtrip")
+    assert len(roundtrip.questions) == len(course.questions)
+    assert {q.question_type for q in roundtrip.questions} == {
+        q.question_type for q in course.questions
+    }
 
 
 def test_moodle_to_openedx_target(moodle_archive: Path, tmp_path: Path):
@@ -187,6 +298,10 @@ def test_moodle_to_moodle_target(moodle_archive: Path, tmp_path: Path):
     assert scorm_settings is not None
     assert scorm_settings.findtext("launch").isdigit()
     assert scorm_settings.findtext("scoes/sco/launch") == "index.html"
+    assert scorm_settings.findtext("timeopen") == "0"
+    assert scorm_settings.findtext("timeclose") == "0"
+    assert scorm_settings.findtext("md5hash") == "0" * 32
+    assert scorm_settings.findtext("options") == ""
 
     resource_dirs = list((extract_dir / "activities").glob("resource_*"))
     assert len(resource_dirs) == 2
@@ -195,7 +310,7 @@ def test_moodle_to_moodle_target(moodle_archive: Path, tmp_path: Path):
     activity_files = [
         path
         for path in (extract_dir / "activities").glob("*/*.xml")
-        if path.name not in ("module.xml", "inforef.xml")
+        if path.name not in ("module.xml", "inforef.xml", "roles.xml", "grades.xml")
     ]
     assert activity_files
     for path in activity_files:

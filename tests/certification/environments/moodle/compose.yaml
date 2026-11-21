@@ -9,6 +9,8 @@ services:
     command:
       - --transaction-isolation=READ-COMMITTED
       - --binlog-format=ROW
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 5s

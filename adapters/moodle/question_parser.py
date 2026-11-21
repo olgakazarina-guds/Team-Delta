@@ -21,6 +21,7 @@ def parse_questions(questions_xml_path: str) -> list[dict[str, Any]]:
     """Parse Moodle questions.xml and return one assessment dict per question."""
     root = parse_xml_file(questions_xml_path)
     assessments = []
+    bank_entry_ids = _bank_entry_ids_by_question(root)
 
     for q_elem in root.findall(".//question"):
         q_id = q_elem.get("id")
@@ -130,6 +131,7 @@ def parse_questions(questions_xml_path: str) -> list[dict[str, Any]]:
         question = {
             "question_id": stable_id("moodle-question", q_id),
             "original_moodle_id": q_id,
+            "original_question_bank_entry_id": bank_entry_ids.get(q_id),
             "question_type": canonical_type,
             "prompt_text": questiontext,
             "points": points,
@@ -150,6 +152,20 @@ def parse_questions(questions_xml_path: str) -> list[dict[str, Any]]:
         )
 
     return assessments
+
+
+def _bank_entry_ids_by_question(root: ET.Element) -> dict[str, str]:
+    """Map question element IDs to their enclosing question bank entry ID."""
+    mapping: dict[str, str] = {}
+    for entry in root.findall(".//question_bank_entry"):
+        entry_id = entry.get("id")
+        if not entry_id:
+            continue
+        for question in entry.findall(".//question"):
+            question_id = question.get("id")
+            if question_id:
+                mapping[question_id] = entry_id
+    return mapping
 
 
 def _answer_text(answer: ET.Element) -> str:

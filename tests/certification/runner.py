@@ -282,6 +282,7 @@ def run_certification(
     generated_at: datetime | None = None,
 ) -> CertificationReport:
     """Run every planned import and return a versioned certification report."""
+    workspace = workspace.resolve()
     workspace.mkdir(parents=True, exist_ok=True)
     generated = generated_at or datetime.now(UTC)
     cases: list[CaseResult] = []

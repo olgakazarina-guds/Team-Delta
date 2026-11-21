@@ -320,14 +320,14 @@ class TransformService:
         )
 
     def _build_question_bank(self, parsed: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        """Build a map from original Moodle question ID to question data."""
+        """Build maps from original question IDs and bank entry IDs to question data."""
         question_bank = {}
         for qa in parsed.get("questions_assessments", []):
             for q in qa.get("questions", []):
                 orig_id = q.get("original_moodle_id")
                 if not orig_id:
                     continue
-                question_bank[orig_id] = {
+                data = {
                     "question_id": q["question_id"],
                     "original_moodle_id": orig_id,
                     "question_type": q["question_type"],
@@ -337,6 +337,10 @@ class TransformService:
                     "correct_answers": q.get("correct_answers", []),
                     "metadata": q.get("metadata", {}),
                 }
+                question_bank[orig_id] = data
+                entry_id = q.get("original_question_bank_entry_id")
+                if entry_id:
+                    question_bank[f"qbe:{entry_id}"] = data
         return question_bank
 
     def _find_quiz_activities(self, parsed: dict[str, Any]) -> list[dict[str, Any]]:
@@ -360,8 +364,15 @@ class TransformService:
     ) -> None:
         """Create Assessment and Question entities for each Moodle quiz."""
         for act in quiz_activities:
-            qids = act.get("metadata", {}).get("question_ids", [])
-            questions_for_quiz = [question_bank[qid] for qid in qids if qid in question_bank]
+            metadata = act.get("metadata", {})
+            refs = metadata.get("question_refs") or [
+                {"kind": "question", "id": qid} for qid in metadata.get("question_ids", [])
+            ]
+            questions_for_quiz = []
+            for ref in refs:
+                key = ref["id"] if ref["kind"] == "question" else f"qbe:{ref['id']}"
+                if key in question_bank:
+                    questions_for_quiz.append(question_bank[key])
             if not questions_for_quiz:
                 continue
 

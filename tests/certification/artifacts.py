@@ -50,7 +50,7 @@ def build_golden_artifact(
     if target not in targets:
         raise ValueError(f"Golden case {case_id!r} does not generate a {target!r} artifact")
 
-    case_dir = workspace / "artifacts" / safe_name(case_id)
+    case_dir = Path(workspace).resolve() / "artifacts" / safe_name(case_id)
     if case_dir.exists():
         shutil.rmtree(case_dir)
     case_dir.mkdir(parents=True)
